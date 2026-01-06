@@ -1,0 +1,69 @@
+#Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+release.properties
+.flattened-pom.xml
+
+##NPM
+node_modules
+data
+
+
+### IntelliJ IDEA ###
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+.kotlin
+.idea
+*.ipr
+*.iml
+*.iws
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+.settings/
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+nb-configuration.xml
+
+### VS Code ###
+.vscode/
+
+
+# Vim
+*.swp
+*.swo
+
+### Mac OS ###
+.DS_Store
+
+# patch
+*.orig
+*.rej
+
+# Local environment
+.env
+
+# Plugin directory
+/.quarkus/cli/plugins/
+# TLS Certificates
+.certs/
+
+## Tendermint Configs ##
+volumes

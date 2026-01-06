@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+echo "Creating application users and schemas..."
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    -- User 1
+    CREATE USER ${ABCI_USER} WITH PASSWORD '${ABCI_PASSWORD}';
+    CREATE SCHEMA IF NOT EXISTS ${ABCI_SCHEMA} AUTHORIZATION ${ABCI_USER};
+    GRANT ALL PRIVILEGES ON SCHEMA ${ABCI_SCHEMA} TO ${ABCI_USER};
+
+    -- User 2
+    CREATE USER ${EVM_USER} WITH PASSWORD '${EVM_PASSWORD}';
+    CREATE SCHEMA IF NOT EXISTS ${EVM_SCHEMA} AUTHORIZATION ${EVM_USER};
+    GRANT ALL PRIVILEGES ON SCHEMA ${EVM_SCHEMA} TO ${EVM_USER};
+EOSQL
+
+echo "Application users and schemas created."

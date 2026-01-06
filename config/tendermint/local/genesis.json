@@ -1,0 +1,35 @@
+{
+  "genesis_time": "2025-12-28T21:08:20.049615208Z",
+  "chain_id": "grph-chain",
+  "initial_height": "0",
+  "consensus_params": {
+    "block": {
+      "max_bytes": "22020096",
+      "max_gas": "-1",
+      "time_iota_ms": "1000"
+    },
+    "evidence": {
+      "max_age_num_blocks": "100000",
+      "max_age_duration": "172800000000000",
+      "max_bytes": "1048576"
+    },
+    "validator": {
+      "pub_key_types": [
+        "ed25519"
+      ]
+    },
+    "version": {}
+  },
+  "validators": [
+    {
+      "address": "99C69B58E9CAB0B88A926A531D73AFBF65853792",
+      "pub_key": {
+        "type": "tendermint/PubKeyEd25519",
+        "value": "s6+X+7f9Yt+K6NPIYLvf3GUctJj5P30lFXns696r52E="
+      },
+      "power": "2000000",
+      "name": "graphene-team"
+    }
+  ],
+  "app_hash": ""
+}

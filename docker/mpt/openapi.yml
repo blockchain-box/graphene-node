@@ -1,0 +1,593 @@
+openapi: 3.0.3
+info:
+  title: Graphene MPT Database Service
+  description: Service for managing and querying Merkle Patricia Tries with session support and proofs.
+  version: 1.0.0
+servers:
+  - url: /graphene-mpt
+    description: Context root for all MPT operations
+
+paths:
+  /health/live:
+    get:
+      summary: Liveness check
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /health/ready:
+    get:
+      summary: Readiness check
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /health:
+    get:
+      summary: General health check
+      responses:
+        '200':
+          description: Service health details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      responses:
+        '200':
+          description: Metrics in Prometheus format
+          content:
+            text/plain; version=0.0.4:
+              schema:
+                type: string
+
+  /{trieId}/root:
+    get:
+      summary: Get current root hash of a trie
+      parameters:
+        - name: trieId
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [state, transactions, receipts, blocks]
+      responses:
+        '200':
+          description: Current root hash
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  root:
+                    type: string
+
+  /{trieId}/get/{key}:
+    get:
+      summary: Get value from current committed state
+      parameters:
+        - name: trieId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Value at the given key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: string
+                    nullable: true
+
+  /{trieId}/get/{root}/{key}:
+    get:
+      summary: Query historical state by root hash
+      parameters:
+        - name: trieId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: root
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Value at the given key for the specific root
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: string
+                    nullable: true
+        '400':
+          description: Invalid parameters
+
+  /{trieId}/proof/{root}/{key}:
+    get:
+      summary: Get Merkle proof for a key at a given root
+      parameters:
+        - name: trieId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: root
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Proof nodes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  proof:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: Invalid parameters
+
+  /{trieId}/proof/block/{blocksRoot}/{blockNumber}/{targetTrieId}/{key}:
+    get:
+      summary: Get block inclusion proof
+      parameters:
+        - name: trieId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: blocksRoot
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: blockNumber
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: targetTrieId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Detailed inclusion proof bundle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockInclusionProof'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /{trieId}/proof/tx-receipt/{blocksRoot}/{blockNumber}/{index}:
+    get:
+      summary: Get combined transaction and receipt proof
+      parameters:
+        - name: trieId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: blocksRoot
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: blockNumber
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: index
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Combined proof bundle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionAndReceiptProof'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/tx/begin:
+    post:
+      summary: Begin a new transaction session
+      responses:
+        '200':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionBeginResponse'
+
+  /session/tx/update:
+    post:
+      summary: Update key/value within a transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionUpdateRequest'
+      responses:
+        '200':
+          description: Value updated in session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionUpdateResponse'
+        '400':
+          description: Missing or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/tx/get/{sessionId}/{trieId}/{key}:
+    get:
+      summary: Get value within a transaction session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: trieId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Value from session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionGetResponse'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/tx/commit:
+    post:
+      summary: Commit a transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCommitRequest'
+      responses:
+        '200':
+          description: Transaction committed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionCommitResponse'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/tx/rollback:
+    post:
+      summary: Roll back a transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRollbackRequest'
+      responses:
+        '200':
+          description: Transaction rolled back
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionRollbackResponse'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/tx/sessions:
+    get:
+      summary: List active transaction sessions
+      responses:
+        '200':
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionsListResponse'
+
+  /blocks/block/size/{id}:
+    get:
+      summary: Get block size by hash or number
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Block number, hash or "latest"
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Block size information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  size:
+                    type: integer
+        '404':
+          description: Block not found
+        '400':
+          description: Invalid parameters
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN]
+        checks:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              status:
+                type: string
+              data:
+                type: object
+
+    BlockInclusionProof:
+      type: object
+      properties:
+        blockNumber:
+          type: string
+        blockHeaderProof:
+          type: array
+          items:
+            type: string
+        blockHeaderValue:
+          type: string
+        trieId:
+          type: string
+        targetRoot:
+          type: string
+        key:
+          type: string
+        inclusionProof:
+          type: array
+          items:
+            type: string
+        blocksRoot:
+          type: string
+
+    TransactionAndReceiptProof:
+      type: object
+      properties:
+        blockNumber:
+          type: string
+        blocksRoot:
+          type: string
+        index:
+          type: string
+        transactions:
+          type: object
+          properties:
+            root:
+              type: string
+            proof:
+              type: array
+              items:
+                type: string
+        receipts:
+          type: object
+          properties:
+            root:
+              type: string
+            proof:
+              type: array
+              items:
+                type: string
+        blockProof:
+          type: array
+          items:
+            type: string
+        blockHeaderValue:
+          type: string
+
+    SessionBeginResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        startRoots:
+          type: array
+          items:
+            type: string
+
+    SessionUpdateRequest:
+      type: object
+      required: [sessionId, trieId, key, value]
+      properties:
+        sessionId:
+          type: string
+        trieId:
+          type: string
+        key:
+          type: string
+        value:
+          type: string
+
+    SessionUpdateResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        newRoot:
+          type: string
+        updateCount:
+          type: integer
+
+    SessionGetResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        trieId:
+          type: string
+        key:
+          type: string
+        value:
+          type: string
+          nullable: true
+
+    SessionCommitRequest:
+      type: object
+      required: [sessionId]
+      properties:
+        sessionId:
+          type: string
+
+    SessionCommitResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        committedRoots:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              newRoot:
+                type: string
+
+    SessionRollbackRequest:
+      type: object
+      required: [sessionId]
+      properties:
+        sessionId:
+          type: string
+
+    SessionRollbackResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        discardedUpdates:
+          type: integer
+
+    SessionsListResponse:
+      type: object
+      properties:
+        sessions:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                startRoot:
+                  type: string
+                currentRoot:
+                  type: string
+                updates:
+                  type: array
+                  items:
+                    type: object
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string

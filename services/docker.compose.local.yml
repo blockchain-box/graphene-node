@@ -1,0 +1,162 @@
+services:
+
+  # -----------------------------
+  # PostgreSQL Datebase
+  # -----------------------------
+  postgresql:
+    container_name: postgresql-local
+    build:
+      context: ..
+      dockerfile: docker/db/Dockerfile
+    image: postgresql:local
+    env_file:
+      - ../config/env/.env.local
+    volumes:
+      - ../volumes/local/postgresql/data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD", "/postgresql/healthcheck.sh" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      graphene-net-local:
+        ipv4_address: 192.16.238.9
+
+  # -----------------------------
+  # MPT DB (Node.js)
+  # -----------------------------
+  mpt-db:
+    container_name: mpt-db-local
+    build:
+      context: ..
+      dockerfile: docker/mpt/Dockerfile
+    image: mpt-db:local
+    volumes:
+      - ../volumes/local/mpt/data:/app/data
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: [ "CMD", "node", "/app/healthcheck.js" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      graphene-net-local:
+        ipv4_address: 192.16.238.10
+
+  # -----------------------------
+  # ABCI App (Quarkus)
+  # -----------------------------
+  app-abci:
+    container_name: grph-abci-local
+    build:
+      context: ..
+      dockerfile: docker/abci/Dockerfile
+    env_file:
+      - ../config/env/.env.local
+    image: grph-abci:local
+    user: "0"
+    environment:
+      QUARKUS_PROFILE: prod
+    ports:
+      - "3002:3002"
+      - "26658:26658"
+    extra_hosts:
+      - "tendermint=192.16.238.13"
+      - "mpt-db=192.16.238.10"
+      - "postgresql=192.16.238.9"
+    depends_on:
+      mpt-db:
+        condition: service_healthy
+      postgresql:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "/app/healthcheck.sh" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      graphene-net-local:
+        ipv4_address: 192.16.238.11
+
+  # -----------------------------
+  # EVM App (Quarkus)
+  # -----------------------------
+  app-evm:
+    container_name: grph-evm-local
+    build:
+      context: ..
+      dockerfile: docker/evm/Dockerfile
+    image: grph-evm:local
+    env_file:
+      - ../config/env/.env.local
+    extra_hosts:
+      - "app-abci=192.16.238.11"
+      - "postgresql=192.16.238.9"
+      - "tendermint=192.16.238.13"
+    environment:
+      QUARKUS_PROFILE: prod
+    ports:
+      - "3003:3003"
+    depends_on:
+      app-abci:
+        condition: service_healthy
+      postgresql:
+        condition: service_healthy
+      tendermint:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      graphene-net-local:
+        ipv4_address: 192.16.238.12
+
+  # -----------------------------
+  # Tendermint
+  # -----------------------------
+  tendermint:
+    container_name: tendermint-local
+    build:
+      context: ..
+      dockerfile: docker/tendermint/Dockerfile
+    image: tendermint:local
+    command: start --proxy_app tcp://app-abci:26658
+    extra_hosts:
+      - "app-abci=192.16.238.11"
+    volumes:
+      - ../config/tendermint/local/config.toml:/tendermint/config/config.toml
+      - ../config/tendermint/local/genesis.json:/tendermint/config/genesis.json
+      - ../volumes/local/tendermint/config/node_key.json:/tendermint/config/node_key.json
+      - ../volumes/local/tendermint/config/priv_validator_key.json:/tendermint/config/priv_validator_key.json
+      - ../volumes/local/tendermint/data:/tendermint/data
+    depends_on:
+      app-abci:
+        condition: service_healthy
+    ports:
+      - "26656:26656"
+      - "26657:26657"
+    healthcheck:
+      test: [ "CMD", "/healthcheck.sh" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      graphene-net-local:
+        ipv4_address: 192.16.238.13
+
+networks:
+  graphene-net-local:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: "192.16.238.0/24"
