@@ -30,7 +30,7 @@ COPY --from=builder /src/build/tendermint /usr/bin/tendermint
 COPY health/healthcheck-tendermint.sh /healthcheck.sh
 RUN chmod +x /healthcheck.sh
 
-COPY docker/tendermint/entrypoint.sh /entrypoint.sh
+COPY docker/validator/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 26656 26657 26660
