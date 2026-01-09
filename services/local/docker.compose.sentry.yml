@@ -1,20 +1,18 @@
 services:
 
   # -----------------------------
-  # PostgreSQL Datebase
+  # PostgreSQL Database for Sentry
   # -----------------------------
-  postgresql:
-    container_name: postgresql-local
+  postgres-sentry:
+    container_name: postgres-sentry-local
     build:
-      context: ..
+      context: ../..
       dockerfile: docker/db/Dockerfile
-    image: postgresql:local
+    image: postgres-sentry:local
     env_file:
-      - ../config/env/.env.local
+      - ../../config/env/.env.local
     volumes:
-      - ../volumes/local/postgresql/data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+      - ../../volumes/local/sentry/postgresql/data:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD", "/postgresql/healthcheck.sh" ]
       interval: 10s
@@ -24,21 +22,19 @@ services:
     restart: unless-stopped
     networks:
       graphene-net-local:
-        ipv4_address: 192.16.238.9
+        ipv4_address: 192.16.238.15
 
   # -----------------------------
-  # MPT DB (Node.js)
+  # MPT DB (Node.js) for Sentry
   # -----------------------------
-  mpt-db:
-    container_name: mpt-db-local
+  mpt-db-sentry:
+    container_name: mpt-db-sentry-local
     build:
-      context: ..
+      context: ../..
       dockerfile: docker/mpt/Dockerfile
-    image: mpt-db:local
+    image: mpt-db-sentry:local
     volumes:
-      - ../volumes/local/mpt/data:/app/data
-    ports:
-      - "3000:3000"
+      - ../../volumes/local/sentry/mpt/data:/app/data
     healthcheck:
       test: [ "CMD", "node", "/app/healthcheck.js" ]
       interval: 10s
@@ -48,33 +44,30 @@ services:
     restart: unless-stopped
     networks:
       graphene-net-local:
-        ipv4_address: 192.16.238.10
+        ipv4_address: 192.16.238.16
 
   # -----------------------------
-  # ABCI App (Quarkus)
+  # ABCI App (Quarkus) for Sentry
   # -----------------------------
-  app-abci:
-    container_name: grph-abci-local
+  app-abci-sentry:
+    container_name: app-abci-sentry-local
     build:
-      context: ..
+      context: ../..
       dockerfile: docker/abci/Dockerfile
     env_file:
-      - ../config/env/.env.local
-    image: grph-abci:local
+      - ../../config/env/.env.local
+    image: app-abci-sentry:local
     user: "0"
     environment:
       QUARKUS_PROFILE: prod
-    ports:
-      - "3002:3002"
-      - "26658:26658"
     extra_hosts:
-      - "tendermint=192.16.238.13"
-      - "mpt-db=192.16.238.10"
-      - "postgresql=192.16.238.9"
+      - "tendermint=192.16.238.14"
+      - "mpt-db=192.16.238.16"
+      - "postgresql=192.16.238.15"
     depends_on:
-      mpt-db:
+      mpt-db-sentry:
         condition: service_healthy
-      postgresql:
+      postgres-sentry:
         condition: service_healthy
     healthcheck:
       test: [ "CMD", "/app/healthcheck.sh" ]
@@ -85,33 +78,34 @@ services:
     restart: unless-stopped
     networks:
       graphene-net-local:
-        ipv4_address: 192.16.238.11
+        ipv4_address: 192.16.238.17
+
 
   # -----------------------------
-  # EVM App (Quarkus)
+  # EVM App (Quarkus) using Sentry
   # -----------------------------
-  app-evm:
-    container_name: grph-evm-local
+  app-evm-sentry:
+    container_name: grph-evm-sentry-local
     build:
-      context: ..
+      context: ../..
       dockerfile: docker/evm/Dockerfile
-    image: grph-evm:local
+    image: grph-evm-sentry:local
     env_file:
-      - ../config/env/.env.local
+      - ../../config/env/.env.local
     extra_hosts:
-      - "app-abci=192.16.238.11"
-      - "postgresql=192.16.238.9"
-      - "tendermint=192.16.238.13"
+      - "app-abci=192.16.238.17"
+      - "postgresql=192.16.238.15"
+      - "tendermint=192.16.238.14"
     environment:
       QUARKUS_PROFILE: prod
     ports:
       - "3003:3003"
     depends_on:
-      app-abci:
+      app-abci-sentry:
         condition: service_healthy
-      postgresql:
+      postgres-sentry:
         condition: service_healthy
-      tendermint:
+      sentry-node-1:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -119,29 +113,30 @@ services:
         ipv4_address: 192.16.238.12
 
   # -----------------------------
-  # Tendermint
+  # Sentry Node (Tendermint)
   # -----------------------------
-  tendermint:
-    container_name: tendermint-local
+  sentry-node-1:
+    container_name: sentry-node-1-local
     build:
-      context: ..
+      context: ../..
       dockerfile: docker/tendermint/Dockerfile
-    image: tendermint:local
+    image: sentry-node-1:local
     command: start --proxy_app tcp://app-abci:26658
     extra_hosts:
-      - "app-abci=192.16.238.11"
+      - "app-abci=192.16.238.17"
+      - "validator=192.16.238.13"
     volumes:
-      - ../config/tendermint/local/config.toml:/tendermint/config/config.toml
-      - ../config/tendermint/local/genesis.json:/tendermint/config/genesis.json
-      - ../volumes/local/tendermint/config/node_key.json:/tendermint/config/node_key.json
-      - ../volumes/local/tendermint/config/priv_validator_key.json:/tendermint/config/priv_validator_key.json
-      - ../volumes/local/tendermint/data:/tendermint/data
-    depends_on:
-      app-abci:
-        condition: service_healthy
+      - ../../config/tendermint/local/full.config.toml:/tendermint/config/config.toml
+      - ../../config/tendermint/local/genesis.json:/tendermint/config/genesis.json
+      - ../../volumes/local/tendermint/full/config/node_key.json:/tendermint/config/node_key.json
+      - ../../volumes/local/tendermint/full/config/priv_validator_key.json:/tendermint/config/priv_validator_key.json
+      - ../../volumes/local/tendermint/full/data:/tendermint/data
     ports:
       - "26656:26656"
       - "26657:26657"
+    depends_on:
+      app-abci-sentry:
+        condition: service_healthy
     healthcheck:
       test: [ "CMD", "/healthcheck.sh" ]
       interval: 10s
@@ -151,7 +146,7 @@ services:
     restart: unless-stopped
     networks:
       graphene-net-local:
-        ipv4_address: 192.16.238.13
+        ipv4_address: 192.16.238.14
 
 networks:
   graphene-net-local:
