@@ -94,8 +94,6 @@ services:
     depends_on:
       app-abci-sentry:
         condition: service_healthy
-      validator-node:
-        condition: service_healthy
     healthcheck:
       test: [ "CMD", "/healthcheck.sh" ]
       interval: 10s
