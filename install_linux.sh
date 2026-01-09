@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+
+# Require bash: running with `sh` (dash) will fail on some constructs (e.g. [[ ]] and pipefail).
+if [ -z "${BASH_VERSION:-}" ]; then
+  if command -v bash >/dev/null 2>&1; then
+    # Re-exec the script with bash preserving args
+    exec bash "$0" "$@"
+  fi
+  echo "This script requires bash. Install bash or run it with: bash $0" >&2
+  exit 1
+fi
+
 set -euo pipefail
 
 # install_linux.sh
@@ -124,6 +135,51 @@ install_docker_fallback() {
   fi
 }
 
+install_legacy_compose() {
+  # Ensure a docker-compose binary is present (legacy), non-interactive.
+  if command -v docker-compose >/dev/null 2>&1; then
+    log "Legacy docker-compose already installed: $(docker-compose --version 2>/dev/null || true)"
+    return 0
+  fi
+
+  # Map uname arch to compose binary name
+  ARCH_M="$(uname -m)"
+  case "${ARCH_M}" in
+    x86_64|amd64)
+      COMPOSE_ARCH="x86_64"
+      ;;
+    aarch64|arm64)
+      COMPOSE_ARCH="aarch64"
+      ;;
+    *)
+      log "Unknown architecture ${ARCH_M}, attempting pip3 install as fallback"
+      if command -v pip3 >/dev/null 2>&1; then
+        $SUDO pip3 install docker-compose
+        return $?
+      else
+        err "Cannot determine compose binary for arch ${ARCH_M} and pip3 not available"
+        return 1
+      fi
+      ;;
+  esac
+
+  DOWNLOAD_URL="https://github.com/docker/compose/releases/latest/download/docker-compose-linux-${COMPOSE_ARCH}"
+  TARGET="/usr/local/bin/docker-compose"
+
+  log "Downloading legacy docker-compose from ${DOWNLOAD_URL} to ${TARGET}"
+  if command -v curl >/dev/null 2>&1; then
+    $SUDO curl -fsSL "${DOWNLOAD_URL}" -o "${TARGET}"
+  elif command -v wget >/dev/null 2>&1; then
+    $SUDO wget -qO "${TARGET}" "${DOWNLOAD_URL}"
+  else
+    err "Neither curl nor wget available to download docker-compose"
+    return 1
+  fi
+
+  $SUDO chmod +x "${TARGET}"
+  log "Installed docker-compose binary: $($SUDO ${TARGET} --version 2>/dev/null || echo 'unknown')"
+}
+
 # Install based on detected distro
 case "$DISTRO" in
   ubuntu|debian)
@@ -143,6 +199,9 @@ case "$DISTRO" in
     install_docker_fallback
     ;;
 esac
+
+## Ensure legacy docker-compose binary is present non-interactively
+install_legacy_compose || log "Warning: failed to install legacy docker-compose; continuing"
 
 # Start and enable docker
 log "Enabling and starting docker service"
