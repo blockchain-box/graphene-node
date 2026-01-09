@@ -180,6 +180,72 @@ install_legacy_compose() {
   log "Installed docker-compose binary: $($SUDO ${TARGET} --version 2>/dev/null || echo 'unknown')"
 }
 
+install_git_lfs() {
+  # Ensure git-lfs is installed and initialized
+  if command -v git-lfs >/dev/null 2>&1; then
+    log "git-lfs already installed: $(git-lfs --version 2>/dev/null || true)"
+    # Ensure hooks are installed
+    $SUDO git lfs install --system >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  log "Installing git-lfs for distro: $DISTRO"
+  case "$DISTRO" in
+    ubuntu|debian)
+      # Try native package first
+      if $SUDO apt-get update -y && $SUDO apt-get install -y git-lfs; then
+        true
+      else
+        log "Trying packagecloud installer for git-lfs"
+        curl -fsSL https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | $SUDO bash && $SUDO apt-get install -y git-lfs
+      fi
+      ;;
+    centos|rhel)
+      PKG_MANAGER="yum"
+      if command -v dnf >/dev/null 2>&1; then
+        PKG_MANAGER=dnf
+      fi
+      if ! $SUDO $PKG_MANAGER install -y git-lfs 2>/dev/null; then
+        log "Trying packagecloud rpm installer for git-lfs"
+        curl -fsSL https://packagecloud.io/install/repositories/github/git-lfs/script.rpm.sh | $SUDO bash && $SUDO $PKG_MANAGER install -y git-lfs
+      fi
+      ;;
+    fedora)
+      if ! $SUDO dnf -y install git-lfs 2>/dev/null; then
+        log "Trying packagecloud rpm installer for git-lfs"
+        curl -fsSL https://packagecloud.io/install/repositories/github/git-lfs/script.rpm.sh | $SUDO bash && $SUDO dnf -y install git-lfs
+      fi
+      ;;
+    arch)
+      $SUDO pacman -Sy --noconfirm git-lfs || $SUDO pacman -S --noconfirm git-lfs
+      ;;
+    *)
+      log "Distro not explicitly supported for git-lfs installation: attempting packagecloud rpm script then deb script"
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsSL https://packagecloud.io/install/repositories/github/git-lfs/script.rpm.sh | $SUDO bash 2>/dev/null || true
+        curl -fsSL https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | $SUDO bash 2>/dev/null || true
+        # try common package managers
+        if command -v apt-get >/dev/null 2>&1; then
+          $SUDO apt-get update -y && $SUDO apt-get install -y git-lfs || true
+        fi
+        if command -v dnf >/dev/null 2>&1; then
+          $SUDO dnf -y install git-lfs || true
+        fi
+      fi
+      ;;
+  esac
+
+  # Verify
+  if command -v git-lfs >/dev/null 2>&1; then
+    log "git-lfs installed: $(git-lfs --version 2>/dev/null || true)"
+    $SUDO git lfs install --system || true
+    return 0
+  fi
+
+  err "Failed to install git-lfs automatically. Please install git-lfs manually (e.g. 'curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash' then 'sudo apt-get install git-lfs')"
+  return 1
+}
+
 # Install based on detected distro
 case "$DISTRO" in
   ubuntu|debian)
@@ -202,6 +268,9 @@ esac
 
 ## Ensure legacy docker-compose binary is present non-interactively
 install_legacy_compose || log "Warning: failed to install legacy docker-compose; continuing"
+
+## Ensure git-lfs is installed (required for some repository assets)
+install_git_lfs || { err "git-lfs installation failed"; exit 1; }
 
 # Start and enable docker
 log "Enabling and starting docker service"
