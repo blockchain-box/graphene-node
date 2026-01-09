@@ -3,7 +3,6 @@ services:
   # PostgreSQL Database for Validator
   # -----------------------------
   postgres-validator:
-    container_name: postgres-validator-local
     build:
       context: ..
       dockerfile: docker/db/Dockerfile
@@ -22,7 +21,6 @@ services:
   # MPT DB (Node.js) for Validator
   # -----------------------------
   mpt-db-validator:
-    container_name: mpt-db-validator-local
     build:
       context: ..
       dockerfile: docker/mpt/Dockerfile
@@ -40,7 +38,6 @@ services:
   # ABCI App (Quarkus) for Validator
   # -----------------------------
   app-abci-validator:
-    container_name: app-abci-validator-local
     build:
       context: ..
       dockerfile: docker/abci/Dockerfile
@@ -63,7 +60,6 @@ services:
   # Validator Node (Tendermint)
   # -----------------------------
   validator-node:
-    container_name: validator-local
     build:
       context: ..
       dockerfile: docker/validator/Dockerfile
