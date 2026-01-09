@@ -11,6 +11,8 @@ fi
 
 set -euo pipefail
 
+git lfs install && git lfs pull
+
 NETWORK_NAME="graphene-net-local"
 COMPOSE_FILE_VALIDATOR="services/local/docker.compose.validator.yml"
 COMPOSE_FILE_SENTRY="services/local/docker.compose.sentry.yml"
