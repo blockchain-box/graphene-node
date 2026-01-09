@@ -3,6 +3,10 @@ services:
   # PostgreSQL Database for Validator
   # -----------------------------
   postgres-validator:
+    container_name: postgres-validator-local
+    build:
+      context: ..
+      dockerfile: docker/db/Dockerfile
     image: postgres-validator:local
     volumes:
       - postgres_validator_data:/var/lib/postgresql/data
@@ -18,7 +22,10 @@ services:
   # MPT DB (Node.js) for Validator
   # -----------------------------
   mpt-db-validator:
-    image: mpt-db-validator:local
+    container_name: mpt-db-validator-local
+    build:
+      context: ..
+      dockerfile: docker/mpt/Dockerfile
     volumes:
       - mpt_validator_data:/app/data
     healthcheck:
@@ -33,7 +40,10 @@ services:
   # ABCI App (Quarkus) for Validator
   # -----------------------------
   app-abci-validator:
-    image: app-abci-validator:local
+    container_name: app-abci-validator-local
+    build:
+      context: ..
+      dockerfile: docker/abci/Dockerfile
     environment:
       QUARKUS_PROFILE: prod
     depends_on:
@@ -53,7 +63,10 @@ services:
   # Validator Node (Tendermint)
   # -----------------------------
   validator-node:
-    image: validator:local
+    container_name: validator-local
+    build:
+      context: ..
+      dockerfile: docker/validator/Dockerfile
     command: start --proxy_app tcp://app-abci-validator:26658
     volumes:
       - tendermint_validator_data:/tendermint/data
