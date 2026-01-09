@@ -86,6 +86,7 @@ services:
       NODE_KEY_JSON: ${NODE_KEY_JSON}
       PRIV_VALIDATOR_KEY_JSON: ${PRIV_VALIDATOR_KEY_JSON}
       GENESIS_JSON: ${GENESIS_JSON}
+      CONFIG_TOML: ${VALIDATOR_CONFIG_TOML}
     command: start --proxy_app tcp://app-abci-validator:26658
     volumes:
       - tendermint_validator_data:/tendermint/data
