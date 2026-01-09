@@ -181,12 +181,28 @@ install_legacy_compose() {
 }
 
 install_git_lfs() {
-  # Ensure git-lfs is installed and initialized
-  if command -v git-lfs >/dev/null 2>&1; then
-    log "git-lfs already installed: $(git-lfs --version 2>/dev/null || true)"
-    # Ensure hooks are installed
-    $SUDO git lfs install --system >/dev/null 2>&1 || true
-    return 0
+  # Helper to check availability via subcommand or binary
+  is_git_lfs_available() {
+    if command -v git >/dev/null 2>&1 && git lfs version >/dev/null 2>&1; then
+      return 0
+    fi
+    if command -v git-lfs >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
+  }
+
+  # If already available, ensure hooks are installed and return
+  if is_git_lfs_available; then
+    log "git-lfs already available: $(git lfs version 2>/dev/null || git-lfs --version 2>/dev/null || true)"
+    # Try to initialize using git lfs subcommand, fallback to git-lfs
+    if command -v git >/dev/null 2>&1 && git lfs install --system >/dev/null 2>&1; then
+      return 0
+    fi
+    if command -v git-lfs >/dev/null 2>&1 && git-lfs install --system >/dev/null 2>&1; then
+      return 0
+    fi
+    # continue to attempt installation if initialization failed
   fi
 
   log "Installing git-lfs for distro: $DISTRO"
@@ -235,10 +251,21 @@ install_git_lfs() {
       ;;
   esac
 
-  # Verify
+  # Initialize and verify availability (try both invocation styles)
+  if command -v git >/dev/null 2>&1 && git lfs install --system >/dev/null 2>&1; then
+    :
+  elif command -v git-lfs >/dev/null 2>&1 && git-lfs install --system >/dev/null 2>&1; then
+    :
+  fi
+
+  # Final verification: require `git lfs version` to succeed
+  if command -v git >/dev/null 2>&1 && git lfs version >/dev/null 2>&1; then
+    log "git-lfs installed and available: $(git lfs version 2>/dev/null)"
+    return 0
+  fi
+  # As last resort, check for git-lfs binary
   if command -v git-lfs >/dev/null 2>&1; then
-    log "git-lfs installed: $(git-lfs --version 2>/dev/null || true)"
-    $SUDO git lfs install --system || true
+    log "git-lfs binary present but 'git lfs' subcommand not reporting version; binary: $(git-lfs --version 2>/dev/null || echo 'unknown')"
     return 0
   fi
 
