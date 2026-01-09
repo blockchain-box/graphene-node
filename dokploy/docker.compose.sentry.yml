@@ -1,0 +1,104 @@
+services:
+  # -----------------------------
+  # PostgreSQL Database for Sentry
+  # -----------------------------
+  postgres-sentry:
+    image: postgres-sentry:local
+    volumes:
+      - postgres_sentry_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD", "/postgresql/healthcheck.sh" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # -----------------------------
+  # MPT DB (Node.js) for Sentry
+  # -----------------------------
+  mpt-db-sentry:
+    image: mpt-db-sentry:local
+    volumes:
+      - mpt_sentry_data:/app/data
+    healthcheck:
+      test: [ "CMD", "node", "/app/healthcheck.js" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # -----------------------------
+  # ABCI App (Quarkus) for Sentry
+  # -----------------------------
+  app-abci-sentry:
+    image: app-abci-sentry:local
+    environment:
+      QUARKUS_PROFILE: prod
+    depends_on:
+      mpt-db-sentry:
+        condition: service_healthy
+      postgres-sentry:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "/app/healthcheck.sh" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # -----------------------------
+  # Sentry Node (Tendermint)
+  # -----------------------------
+  sentry-node:
+    image: sentry:local
+    command: start --proxy_app tcp://app-abci-sentry:26658
+    volumes:
+      - tendermint_sentry_data:/tendermint/data
+      - tendermint_sentry_config:/tendermint/config
+    depends_on:
+      app-abci-sentry:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "/healthcheck.sh" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # -----------------------------
+  # EVM App (Quarkus) using Sentry
+  # -----------------------------
+  app-evm-sentry:
+    container_name: grph-evm-sentry-local
+    build:
+      context: ..
+      dockerfile: docker/evm/Dockerfile
+    image: grph-evm-sentry:local
+    healthcheck:
+      test: [ "CMD", "/app/healthcheck.sh" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    environment:
+      QUARKUS_PROFILE: prod
+    ports:
+      - "3003:3003"
+    depends_on:
+      app-abci-sentry:
+        condition: service_healthy
+      postgres-sentry:
+        condition: service_healthy
+      sentry-node:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_sentry_data:
+  mpt_sentry_data:
+  tendermint_sentry_data:
+  tendermint_sentry_config:
