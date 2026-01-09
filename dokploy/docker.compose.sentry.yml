@@ -56,7 +56,7 @@ services:
       APP_ABCI_DB_USER: ${APP_ABCI_DB_USER}
       APP_ABCI_DB_PASSWORD: ${APP_ABCI_DB_PASSWORD}
       APP_ABCI_DB_SCHEMA: ${APP_ABCI_DB_SCHEMA}
-      POSTGRESSQL_DB_HOST: postgres-validator
+      POSTGRESSQL_DB_HOST: postgres-sentry
       TENDERMINT_HOST: sentry-node
       MPT_DB_HOST: mpt-db-sentry
       CHAIN_ID: ${CHAIN_ID}
