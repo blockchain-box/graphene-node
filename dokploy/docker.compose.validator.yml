@@ -7,6 +7,16 @@ services:
       context: ..
       dockerfile: docker/db/Dockerfile
     image: postgres-validator:local
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      APP_ABCI_DB_USER: ${APP_ABCI_DB_USER}
+      APP_ABCI_DB_PASSWORD: ${APP_ABCI_DB_PASSWORD}
+      APP_ABCI_DB_SCHEMA: ${APP_ABCI_DB_SCHEMA}
+      APP_EVM_DB_USER: ${APP_EVM_DB_USER}
+      APP_EVM_DB_PASSWORD: ${APP_EVM_DB_PASSWORD}
+      APP_EVM_DB_SCHEMA: ${APP_EVM_DB_SCHEMA}
     volumes:
       - postgres_validator_data:/var/lib/postgresql/data
     healthcheck:
@@ -43,6 +53,14 @@ services:
       dockerfile: docker/abci/Dockerfile
     environment:
       QUARKUS_PROFILE: prod
+      APP_ABCI_DB_USER: ${APP_ABCI_DB_USER}
+      APP_ABCI_DB_PASSWORD: ${APP_ABCI_DB_PASSWORD}
+      APP_ABCI_DB_SCHEMA: ${APP_ABCI_DB_SCHEMA}
+      POSTGRESSQL_DB_HOST: postgres-validator
+      TENDERMINT_HOST: validator-node
+      MPT_DB_HOST: mpt-db-validator
+      CHAIN_ID: ${CHAIN_ID}
+      COIN_SYMBOLE: ${COIN_SYMBOLE}
     depends_on:
       mpt-db-validator:
         condition: service_healthy
