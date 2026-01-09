@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+
+# Re-exec with bash if invoked with sh/dash which doesn't support 'set -o pipefail'
+if [ -z "${BASH_VERSION:-}" ]; then
+  if command -v bash >/dev/null 2>&1; then
+    exec bash "$0" "$@"
+  fi
+  echo "This script requires bash. Run with: bash $0" >&2
+  exit 1
+fi
+
 set -euo pipefail
 
 # -----------------------------
