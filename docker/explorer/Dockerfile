@@ -8,7 +8,7 @@ COPY docker/explorer/nginx.conf /etc/nginx/conf.d/default.conf
 COPY docker/explorer/app /usr/share/nginx/html
 
 # Expose http
-EXPOSE 80
+EXPOSE 8080
 
 # Start nginx in foreground
 CMD ["nginx", "-g", "daemon off;"]

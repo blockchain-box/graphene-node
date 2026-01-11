@@ -176,7 +176,7 @@ services:
       dockerfile: docker/explorer/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-sentry}_graphene_explorer
     ports:
-      - "80:80"
+      - "8080:8080"
     depends_on:
       app-evm-sentry:
         condition: service_healthy
