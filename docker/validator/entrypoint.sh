@@ -17,13 +17,6 @@ if [ -n "${PRIV_VALIDATOR_KEY_JSON:-}" ]; then
   echo "$PRIV_VALIDATOR_KEY_JSON" | base64 -d > "$CONFIG_DIR/priv_validator_key.json"
 fi
 
-if [ -n "${GENESIS_JSON:-}" ]; then
-  echo "$GENESIS_JSON" | base64 -d > "$CONFIG_DIR/genesis.json"
-fi
-
-if [ -n "${CONFIG_TOML:-}" ]; then
-  echo "$CONFIG_TOML" | base64 -d > "$CONFIG_DIR/config.toml"
-fi
 
 # Set secure permissions on JSON files
 chmod 600 "$CONFIG_DIR"/*.json || true

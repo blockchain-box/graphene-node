@@ -1,12 +1,15 @@
+name: validator-${NODE_ENV}
+
 services:
   # -----------------------------
-  # PostgreSQL Database for Sentry
+  # PostgreSQL Database for Validator
   # -----------------------------
-  postgres-sentry:
+  postgres-validator:
     build:
       context: ..
       dockerfile: docker/db/Dockerfile
-    image: postgres-sentry:local
+    image: postgres-validator:local
+    container_name: ${COMPOSE_PROJECT_NAME:-validator}_postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -18,7 +21,7 @@ services:
       APP_EVM_DB_PASSWORD: ${APP_EVM_DB_PASSWORD}
       APP_EVM_DB_SCHEMA: ${APP_EVM_DB_SCHEMA}
     volumes:
-      - postgres_sentry_data:/var/lib/postgresql/data
+      - ../volumes/${NODE_ENV}/validator/postgresql/data:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD", "/postgresql/healthcheck.sh" ]
       interval: 10s
@@ -26,16 +29,19 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+    networks:
+      graphene-net:
 
   # -----------------------------
-  # MPT DB (Node.js) for Sentry
+  # MPT DB (Node.js) for Validator
   # -----------------------------
-  mpt-db-sentry:
+  mpt-db-validator:
     build:
       context: ..
       dockerfile: docker/mpt/Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-validator}_mpt_db
     volumes:
-      - mpt_sentry_data:/app/data
+      - ../volumes/${NODE_ENV}/validator/mpt/data:/app/data
     healthcheck:
       test: [ "CMD", "node", "/app/healthcheck.js" ]
       interval: 10s
@@ -43,28 +49,31 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+    networks:
+      graphene-net:
 
   # -----------------------------
-  # ABCI App (Quarkus) for Sentry
+  # ABCI App (Quarkus) for Validator
   # -----------------------------
-  app-abci-sentry:
+  app-abci-validator:
     build:
       context: ..
       dockerfile: docker/abci/Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-validator}_abci_app
     environment:
       QUARKUS_PROFILE: prod
       APP_ABCI_DB_USER: ${APP_ABCI_DB_USER}
       APP_ABCI_DB_PASSWORD: ${APP_ABCI_DB_PASSWORD}
       APP_ABCI_DB_SCHEMA: ${APP_ABCI_DB_SCHEMA}
-      POSTGRESSQL_DB_HOST: postgres-sentry
-      TENDERMINT_HOST: sentry-node
-      MPT_DB_HOST: mpt-db-sentry
+      POSTGRESSQL_DB_HOST: postgres-validator
+      TENDERMINT_HOST: validator-node
+      MPT_DB_HOST: mpt-db-validator
       CHAIN_ID: ${CHAIN_ID}
       COIN_SYMBOLE: ${COIN_SYMBOLE}
     depends_on:
-      mpt-db-sentry:
+      mpt-db-validator:
         condition: service_healthy
-      postgres-sentry:
+      postgres-validator:
         condition: service_healthy
     healthcheck:
       test: [ "CMD", "/app/healthcheck.sh" ]
@@ -73,29 +82,41 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+    networks:
+      graphene-net:
 
   # -----------------------------
-  # Sentry Node (Tendermint)
+  # Validator Node (Tendermint)
   # -----------------------------
-  sentry-node:
+  validator-node:
     build:
       context: ..
       dockerfile: docker/validator/Dockerfile
-    image: tendermint-sentry:local
+    image: tendermint-validator:local
+    container_name: ${COMPOSE_PROJECT_NAME:-validator}_tendermint
     environment:
       NODE_KEY_JSON: ${NODE_KEY_JSON}
       PRIV_VALIDATOR_KEY_JSON: ${PRIV_VALIDATOR_KEY_JSON}
-      GENESIS_JSON: ${GENESIS_JSON}
-      CONFIG_TOML: ${VALIDATOR_CONFIG_TOML}
-    command: start --proxy_app tcp://app-abci-sentry:26658
+      P2P_NODE_NAME: ${P2P_NODE_NAME}
+      P2P_SEEDS: ${P2P_SEEDS}
+      P2P_PERSISTENT_PEERS: ${P2P_PERSISTENT_PEERS}
+      P2P_PRIVATE_PEER_IDS: ${P2P_PRIVATE_PEER_IDS}
+      P2P_UNCONDITIONAL_PEERS: ${P2P_UNCONDITIONAL_PEERS}
+    command: [
+      "start",
+      "--proxy_app", tcp://app-abci-validator:26658,
+      "--moniker", "${P2P_NODE_NAME}",
+      "--p2p.seeds", "${P2P_SEEDS}",
+      "--p2p.persistent_peers", "${P2P_PERSISTENT_PEERS}",
+      "--p2p.private_peer_ids", "${P2P_PRIVATE_PEER_IDS}",
+      "--p2p.unconditional_peer_ids", "${P2P_UNCONDITIONAL_PEERS}",
+    ]
     volumes:
-      - tendermint_sentry_data:/tendermint/data
-      - tendermint_sentry_config:/tendermint/config
+      - ../volumes/${NODE_ENV}/tendermint/validator/data:/tendermint/data
+      - ../config/tendermint/${NODE_ENV}/genesis.json:/tendermint/config/genesis.json
     depends_on:
-      app-abci-sentry:
+      app-abci-validator:
         condition: service_healthy
-    expose:
-      - "26656"
     healthcheck:
       test: [ "CMD", "/healthcheck.sh" ]
       interval: 10s
@@ -104,16 +125,8 @@ services:
       start_period: 20s
     restart: unless-stopped
     networks:
-      tendermint-net:
-        aliases:
-          - sentry-node
-
-volumes:
-  postgres_sentry_data:
-  mpt_sentry_data:
-  tendermint_sentry_data:
-  tendermint_sentry_config:
+      graphene-net:
 
 networks:
-  tendermint-net:
+  graphene-net:
     external: true

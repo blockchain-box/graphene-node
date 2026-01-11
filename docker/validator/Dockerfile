@@ -16,9 +16,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} make build
 # ---- runtime stage ----
 FROM alpine:3.18
 
-ENV MONIKER=graphene-peer-node \
-    CHAIN_ID=graphene-testnet \
-    TMHOME=/tendermint
+ENV TMHOME=/tendermint
 
 WORKDIR /tendermint
 
@@ -32,6 +30,8 @@ RUN chmod +x /healthcheck.sh
 
 COPY docker/validator/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+COPY docker/validator/config.toml /tendermint/config/config.toml
 
 EXPOSE 26656 26657 26660
 

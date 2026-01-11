@@ -98,24 +98,81 @@ remove_container_if_exists() {
 # Main
 # -----------------------------
 
-init_node() {
-  echo "  🔧 Initializing Tendermint ($NODE_TYPE)..."
-  INIT_CONTAINER="${CONTAINER_NAME}_${CMD}"
-  docker rm -f "$INIT_CONTAINER" >/dev/null 2>&1 || true
-  ensure_dirs
-  docker run \
-     --name "$INIT_CONTAINER" \
-     -v "$DATA_DIR":/tendermint/data \
-     "$TENDERMINT_IMAGE" "$CMD" "$NODE_TYPE"
-  mkdir -p "$(dirname "$CONFIG_NODE_KEY_PATH")"
-  docker cp "$INIT_CONTAINER":/tendermint/config/node_key.json "$CONFIG_NODE_KEY_PATH"
-  docker cp "$INIT_CONTAINER":/tendermint/config/priv_validator_key.json "$CONFIG_VALIDATOR_KEY_PATH"
-  docker rm -f "$INIT_CONTAINER"
-  echo "  ✅ Tendermint initialized"
+show_validator_info() {
+  # Extract lowercase validator address
+  VALIDATOR_ADDRESS=$(jq -r '.address' "$CONFIG_VALIDATOR_KEY_PATH" | tr '[:upper:]' '[:lower:]')
+  VALIDATOR_BASE64_PUBKEY=$(jq -r '.pub_key.value' "$CONFIG_VALIDATOR_KEY_PATH")
+  echo "  🏷 Validator Address: 0x${VALIDATOR_ADDRESS}"
+  echo
+  echo "  ⚠️ Important:"
+  echo "     1. Start your validator node first before submitting a stake transaction."
+  echo "     2. Stake to this validator address on the Graphene chain to avoid slashing."
+  echo "        Address:"
+  echo "           0x${VALIDATOR_ADDRESS}"
+  echo "        Public key (base64):"
+  echo "           ${VALIDATOR_BASE64_PUBKEY}"
+  echo "        Node ID:"
+                   CMD="show-node-id"
+  echo "           $(show_node_info)"
+  echo
+  rm -rf "$CONFIG_DIR"
+  echo "⚠️ Provide these information to whitelisting authority to get your validator node whitelisted on the network.
+by adding the validator address to the seed nodes of the network."
 }
 
+init_node() {
+  echo "  🔧 Initializing Tendermint ($NODE_TYPE)..."
+
+  INIT_CONTAINER="${CONTAINER_NAME}_${CMD}"
+
+  # Clean up previous temporary container
+  docker rm -f "$INIT_CONTAINER" >/dev/null 2>&1 || true
+
+  ensure_dirs
+
+  # Run temporary container to generate keys
+  docker run \
+    --name "$INIT_CONTAINER" \
+    -v "$DATA_DIR":/tendermint/data \
+    "$TENDERMINT_IMAGE" "$CMD" "$NODE_TYPE"
+
+  mkdir -p "$(dirname "$CONFIG_NODE_KEY_PATH")"
+
+  # Copy keys from container
+  docker cp "$INIT_CONTAINER":/tendermint/config/node_key.json "$CONFIG_NODE_KEY_PATH"
+  docker cp "$INIT_CONTAINER":/tendermint/config/priv_validator_key.json "$CONFIG_VALIDATOR_KEY_PATH"
+
+  # Clean up temporary container
+  docker rm -f "$INIT_CONTAINER"
+
+  echo "  ✅ Tendermint initialized"
+
+  # Base64 encode keys for environment variables
+  NODE_KEY_JSON=$(base64 -i "$CONFIG_NODE_KEY_PATH" | tr -d '\n')
+  PRIV_VALIDATOR_KEY_JSON=$(base64 -i "$CONFIG_VALIDATOR_KEY_PATH" | tr -d '\n')
+
+  # Show key info for all node types
+  echo
+  echo "  📄 Save these keys in a safe place:"
+  echo
+  echo "  🔑 Node Key (node_key.json) for your environment:"
+  echo "     NODE_KEY_JSON=${NODE_KEY_JSON}"
+  echo
+  echo "  🔐 Private Validator Key (priv_validator_key.json) for your environment:"
+  echo "     PRIV_VALIDATOR_KEY_JSON=${PRIV_VALIDATOR_KEY_JSON}"
+  echo
+
+  # Show validator-specific info only if NODE_TYPE=validator
+  if [ "$NODE_TYPE" = "validator" ]; then
+      show_validator_info
+  else
+    CMD="show-node-id"
+    echo "  Node ID: $(show_node_info)"
+  fi
+}
+
+
 show_node_info() {
-  echo "  🔎 Showing your Tendermint node info of type ${NODE_TYPE}..."
   INFO_CONTAINER="${CONTAINER_NAME}_${CMD}"
   docker rm -f "$INFO_CONTAINER" >/dev/null 2>&1 || true
   docker run \
@@ -129,8 +186,10 @@ show_node_info() {
 if [ "$CMD" = "init" ]; then
    init_node
 elif [ "$CMD" = "show-node-id" ]; then
+  echo "  🔎 Node id of type ${NODE_TYPE}..."
   show_node_info
 elif [ "$CMD" = "show-validator" ]; then
+  echo "  🔎 Validator info of type ${NODE_TYPE}..."
   show_node_info
 else
   echo "Not valid command: $CMD"

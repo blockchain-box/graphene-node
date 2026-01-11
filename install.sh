@@ -1,44 +1,27 @@
-#!/usr/bin/env bash
-
-# Require bash: running with `sh` (dash) will fail on some constructs (e.g. [[ ]] and pipefail).
-if [ -z "${BASH_VERSION:-}" ]; then
-  if command -v bash >/dev/null 2>&1; then
-    # Re-exec the script with bash preserving args
-    exec bash "$0" "$@"
-  fi
-  echo "This script requires bash. Install bash or run it with: bash $0" >&2
-  exit 1
-fi
+#!/bin/bash
 
 set -euo pipefail
 
-# install_linux.sh
-# Idempotentes Installationsskript für Docker und Docker Compose (Plugin) auf Linux.
-# Unterstützte Distros: Debian/Ubuntu, RHEL/CentOS/Fedora, Arch. Fallback: Docker convenience script.
-# Am Ende kann optional das lokale Startskript `deploy/start.local.sh` ausgeführt werden.
+# install.sh
+# Supported Distros: Debian/Ubuntu, RHEL/CentOS/Fedora.
 
-REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-START_SCRIPT="$REPO_ROOT/deploy/start.local.sh"
+log() { echo "[install_graphene] $*"; }
+err() { echo "[install_graphene] ERROR: $*" >&2; }
 
 usage() {
   cat <<EOF
-Usage: $0 [--yes|--run]
+Usage: $0 [--yes|-y] [--help|-h]
+Options:
   --yes / -y    : non-interactive, will run start script automatically after install
-  --run / -r    : same as --yes
   --help / -h   : show this help
 
 This script will install Docker Engine and the Docker Compose plugin and enable/start the docker service.
 EOF
 }
 
-RUN_START=false
-
-while [[ ${1:-} != "" ]]; do
+# Parse arguments: optional first positional env, then flags
+while [[ $# -gt 0 ]]; do
   case "$1" in
-    -y|--yes|-r|--run)
-      RUN_START=true
-      shift
-      ;;
     -h|--help)
       usage
       exit 0
@@ -51,9 +34,6 @@ while [[ ${1:-} != "" ]]; do
   esac
 done
 
-# Helpers
-log() { echo "[install_linux] $*"; }
-err() { echo "[install_linux] ERROR: $*" >&2; }
 
 # Ensure running with sudo or root when needed
 SUDO=""
@@ -337,42 +317,3 @@ else
   exit 1
 fi
 log "Compose command: $COMPOSE_CMD"
-
-# Optionally run the start script
-if [ "$RUN_START" = true ]; then
-  if [ -x "$START_SCRIPT" ]; then
-    log "Running start script: $START_SCRIPT"
-    # If not root, run with sudo to ensure docker commands succeed without waiting for relogin
-    if [[ $(id -u) -ne 0 ]]; then
-      $SUDO bash "$START_SCRIPT"
-    else
-      bash "$START_SCRIPT"
-    fi
-  else
-    err "Start script not found or not executable: $START_SCRIPT"
-    exit 1
-  fi
-else
-  # Ask user whether to run it now
-  read -r -p "Do you want to run the local start script now? [y/N] " answer
-  case "$answer" in
-    [yY][eE][sS]|[yY])
-      if [ -x "$START_SCRIPT" ]; then
-        if [[ $(id -u) -ne 0 ]]; then
-          $SUDO bash "$START_SCRIPT"
-        else
-          bash "$START_SCRIPT"
-        fi
-      else
-        err "Start script not found or not executable: $START_SCRIPT"
-        exit 1
-      fi
-      ;;
-    *)
-      log "Installation complete. To start the local stack run:"
-      echo "  bash $START_SCRIPT"
-      ;;
-  esac
-fi
-
-log "Done."
