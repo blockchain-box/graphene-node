@@ -108,7 +108,7 @@ services:
       "--moniker", "${P2P_NODE_NAME}",
       "--p2p.pex",
       "--p2p.seed_mode",
-      "--p2p.seeds", "${P2P_SEEDS}",
+#      "--p2p.seeds", "${P2P_SEEDS}",
       "--p2p.persistent_peers", "${P2P_PERSISTENT_PEERS}",
       "--p2p.private_peer_ids", "${P2P_PRIVATE_PEER_IDS}",
       "--p2p.unconditional_peer_ids", "${P2P_UNCONDITIONAL_PEERS}",
