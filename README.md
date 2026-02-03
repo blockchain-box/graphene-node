@@ -9,7 +9,7 @@ Docker-based deployment for Graphene network nodes (validator and sentry).
 
 ## Prerequisites
 
-- **Docker and Docker Compose** (V1 or V2)
+- **Docker** (new Version)
     - [Install Docker](https://docs.docker.com/get-docker/)
 
 - **Git**
@@ -82,6 +82,7 @@ sh deploy.sh --clean local
     - RPC URL: `http://localhost:3003/graphene-evm/rpc`
     - Chain ID: `9991`
     - Currency symbol: `GRPH`
+    - Explorer: `http://localhost:8080`
 
 2. **Import Test Wallet** (optional):
     - Private key: `8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba`
