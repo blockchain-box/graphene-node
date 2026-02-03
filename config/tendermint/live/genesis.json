@@ -22,10 +22,10 @@
   },
   "validators": [
     {
-      "address": "5E799779E9284B5F5698AA1FDDABA45AEB3C5168",
+      "address": "99C69B58E9CAB0B88A926A531D73AFBF65853792",
       "pub_key": {
         "type": "tendermint/PubKeyEd25519",
-        "value": "pnRWphyx5LzbjPrcDXyd1qIpNZmeih2jc25PEX+2rfs="
+        "value": "s6+X+7f9Yt+K6NPIYLvf3GUctJj5P30lFXns696r52E="
       },
       "power": "2000000",
       "name": "graphene-team"
