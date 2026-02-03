@@ -21,7 +21,9 @@ services:
       APP_EVM_DB_PASSWORD: ${APP_EVM_DB_PASSWORD}
       APP_EVM_DB_SCHEMA: ${APP_EVM_DB_SCHEMA}
     volumes:
-      - ../volumes/${NODE_ENV}/sentry/postgresql/data:/var/lib/postgresql/data
+      - ../volumes/${NODE_ENV}/sentry/postgresql:/var/lib/postgresql
+    ports:
+      - "5432:5432"
     healthcheck:
       test: [ "CMD", "/postgresql/healthcheck.sh" ]
       interval: 10s
@@ -108,7 +110,6 @@ services:
       "--moniker", "${P2P_NODE_NAME}",
       "--p2p.pex",
       "--p2p.seed_mode",
-#      "--p2p.seeds", "${P2P_SEEDS}",
       "--p2p.persistent_peers", "${P2P_PERSISTENT_PEERS}",
       "--p2p.private_peer_ids", "${P2P_PRIVATE_PEER_IDS}",
       "--p2p.unconditional_peer_ids", "${P2P_UNCONDITIONAL_PEERS}",
@@ -116,6 +117,9 @@ services:
     volumes:
       - ../volumes/${NODE_ENV}/tendermint/sentry/data:/tendermint/data
       - ../config/tendermint/${NODE_ENV}/genesis.json:/tendermint/config/genesis.json
+    ports:
+      - "26656:26656"
+      - "26657:26657"
     depends_on:
       app-abci-sentry:
         condition: service_healthy

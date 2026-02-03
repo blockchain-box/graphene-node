@@ -21,7 +21,7 @@ services:
       APP_EVM_DB_PASSWORD: ${APP_EVM_DB_PASSWORD}
       APP_EVM_DB_SCHEMA: ${APP_EVM_DB_SCHEMA}
     volumes:
-      - ../volumes/${NODE_ENV}/validator/postgresql/data:/var/lib/postgresql/data
+      - ../volumes/${NODE_ENV}/validator/postgresql:/var/lib/postgresql
     healthcheck:
       test: [ "CMD", "/postgresql/healthcheck.sh" ]
       interval: 10s
