@@ -1,0 +1,35 @@
+name: tag-release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, 'release/v')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute and create tag
+        run: |
+          VERSION=$(echo "${{ github.event.head_commit.message }}" | grep -oP 'release/v[\d.]+' | head -1 | sed 's|release/||')
+          echo "Version: $VERSION"
+
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          PREFIX="v${MAJOR_MINOR}"
+
+          LATEST_PATCH=$(git tag -l "${PREFIX}.*" | sed "s/${PREFIX}.//" | sort -n | tail -1)
+          LATEST_PATCH=${LATEST_PATCH:-0}
+          NEXT_PATCH=$(( LATEST_PATCH + 1 ))
+          TAG="${PREFIX}.${NEXT_PATCH}"
+
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+          echo "Created tag: $TAG"

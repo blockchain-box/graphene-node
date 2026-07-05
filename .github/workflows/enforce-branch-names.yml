@@ -1,0 +1,42 @@
+name: enforce-branch-names
+
+on:
+  create:
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    if: |
+      github.event.ref_type == 'branch' &&
+      github.event.ref != 'main' &&
+      ! contains(fromJSON('["Anas2001","graphene-orchestrator[bot]"]'), github.actor)
+    steps:
+      - name: Check branch name
+        id: check
+        run: |
+          BRANCH="${{ github.event.ref }}"
+          if [[ "$BRANCH" =~ ^(feature/|issue/) ]]; then
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+            echo "Allowed: $BRANCH"
+          else
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+            echo "Blocked: $BRANCH"
+            echo "Regular users can only create 'feature/' and 'issue/' branches"
+          fi
+
+      - uses: actions/create-github-app-token@v3
+        if: steps.check.outputs.allowed == 'false'
+        id: app-token
+        with:
+          client-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Delete unauthorized branch
+        if: steps.check.outputs.allowed == 'false'
+        run: |
+          gh api -X DELETE "/repos/${{ github.repository }}/git/refs/heads/${{ github.event.ref }}"
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
