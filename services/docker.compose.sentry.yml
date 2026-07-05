@@ -49,7 +49,6 @@ services:
       - graphene-net
 
   app-abci-sentry:
-    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/abci/Dockerfile
@@ -127,7 +126,6 @@ services:
       - graphene-net
 
   app-evm-sentry:
-    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/evm/Dockerfile
