@@ -1,9 +1,6 @@
 name: sentry-${NODE_ENV}
 
 services:
-  # -----------------------------
-  # PostgreSQL Database for Sentry
-  # -----------------------------
   postgres-sentry:
     build:
       context: ..
@@ -25,18 +22,15 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: [ "CMD", "/postgresql/healthcheck.sh" ]
-      interval: 10s
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
+      interval: 3s
       timeout: 5s
-      retries: 5
+      retries: 30
       start_period: 20s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
-  # -----------------------------
-  # MPT DB (Node.js) for Sentry
-  # -----------------------------
   mpt-db-sentry:
     build:
       context: ..
@@ -45,19 +39,17 @@ services:
     volumes:
       - ../volumes/${NODE_ENV}/sentry/mpt/data:/app/data
     healthcheck:
-      test: [ "CMD", "node", "/app/healthcheck.js" ]
-      interval: 10s
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 3s
       timeout: 5s
-      retries: 5
+      retries: 20
       start_period: 20s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
-  # -----------------------------
-  # ABCI App (Quarkus) for Sentry
-  # -----------------------------
   app-abci-sentry:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/abci/Dockerfile
@@ -71,25 +63,22 @@ services:
       TENDERMINT_HOST: sentry-node
       MPT_DB_HOST: mpt-db-sentry
       CHAIN_ID: ${CHAIN_ID}
-      COIN_SYMBOLE: ${COIN_SYMBOLE}
+      COIN_SYMBOL: ${COIN_SYMBOL}
     depends_on:
       mpt-db-sentry:
         condition: service_healthy
       postgres-sentry:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "/app/healthcheck.sh" ]
-      interval: 10s
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 30
+      start_period: 10s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
-  # -----------------------------
-  # Sentry Node (Tendermint)
-  # -----------------------------
   sentry-node:
     build:
       context: ..
@@ -104,16 +93,20 @@ services:
       P2P_PERSISTENT_PEERS: ${P2P_PERSISTENT_PEERS}
       P2P_PRIVATE_PEER_IDS: ${P2P_PRIVATE_PEER_IDS}
       P2P_UNCONDITIONAL_PEERS: ${P2P_UNCONDITIONAL_PEERS}
-    command: [
-      "start",
-      "--proxy_app", tcp://app-abci-sentry:26658,
-      "--moniker", "${P2P_NODE_NAME}",
-      "--p2p.pex",
-      "--p2p.seed_mode",
-      "--p2p.persistent_peers", "${P2P_PERSISTENT_PEERS}",
-      "--p2p.private_peer_ids", "${P2P_PRIVATE_PEER_IDS}",
-      "--p2p.unconditional_peer_ids", "${P2P_UNCONDITIONAL_PEERS}",
-    ]
+    command:
+      - start
+      - --proxy_app
+      - tcp://app-abci-sentry:26658
+      - --moniker
+      - ${P2P_NODE_NAME}
+      - --p2p.pex
+      - --p2p.seed_mode
+      - --p2p.persistent_peers
+      - ${P2P_PERSISTENT_PEERS}
+      - --p2p.private_peer_ids
+      - ${P2P_PRIVATE_PEER_IDS}
+      - --p2p.unconditional_peer_ids
+      - ${P2P_UNCONDITIONAL_PEERS}
     volumes:
       - ../volumes/${NODE_ENV}/tendermint/sentry/data:/tendermint/data
       - ../config/tendermint/${NODE_ENV}/genesis.json:/tendermint/config/genesis.json
@@ -124,19 +117,17 @@ services:
       app-abci-sentry:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "/healthcheck.sh" ]
-      interval: 10s
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
-  # -----------------------------
-  # EVM App (Quarkus) for Sentry
-  # -----------------------------
   app-evm-sentry:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/evm/Dockerfile
@@ -151,7 +142,7 @@ services:
       TENDERMINT_HOST: sentry-node
       MPT_DB_HOST: mpt-db-sentry
       CHAIN_ID: ${CHAIN_ID}
-      COIN_SYMBOLE: ${COIN_SYMBOLE}
+      COIN_SYMBOL: ${COIN_SYMBOL}
     ports:
       - "3003:3003"
     depends_on:
@@ -162,18 +153,15 @@ services:
       sentry-node:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "/app/healthcheck.sh" ]
-      interval: 10s
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 30
+      start_period: 10s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
-  # -----------------------------
-  # Graphene Explorer App
-  # -----------------------------
   graphene-explorer-sentry:
     build:
       context: ..
@@ -187,14 +175,14 @@ services:
       sentry-node:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "/app/healthcheck.sh" ]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
 networks:
   graphene-net:

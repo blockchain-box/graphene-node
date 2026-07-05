@@ -262,9 +262,10 @@ git_lfs_pull() {
 }
 
 deploy_service() {
-    local service_type="$1"  # "validator" or "sentry"
+    local service_type="$1"
     local compose_file="$2"
-    local env_files=("$3")
+    shift 2
+    local env_files=("$@")
     local project_name="${DEPLOYMENT_ID}_${service_type}"
 
     print_step "Deploying ${service_type} services"
@@ -367,7 +368,7 @@ main() {
                 exit 0
                 ;;
             -v|--version)
-                print_version
+                echo "${SCRIPT_NAME} v${SCRIPT_VERSION}"
                 exit 0
                 ;;
             -s|--stop)
@@ -466,7 +467,7 @@ main() {
     fi
 
     # Deploy services
-    if deploy_service "validator" "$COMPOSE_FILE_VALIDATOR" "${ENV_FILES_VALIDATOR[*]}"; then
+    if deploy_service "validator" "$COMPOSE_FILE_VALIDATOR" "${ENV_FILES_VALIDATOR[@]}"; then
         print_success "Validator deployment completed"
     else
         print_error "Validator deployment failed"
@@ -475,7 +476,7 @@ main() {
         fi
     fi
 
-    if deploy_service "sentry" "$COMPOSE_FILE_SENTRY" "${ENV_FILES_SENTRY[*]}"; then
+    if deploy_service "sentry" "$COMPOSE_FILE_SENTRY" "${ENV_FILES_SENTRY[@]}"; then
         print_success "Sentry deployment completed"
     else
         print_error "Sentry deployment failed"

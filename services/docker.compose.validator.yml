@@ -1,9 +1,6 @@
 name: validator-${NODE_ENV}
 
 services:
-  # -----------------------------
-  # PostgreSQL Database for Validator
-  # -----------------------------
   postgres-validator:
     build:
       context: ..
@@ -23,18 +20,15 @@ services:
     volumes:
       - ../volumes/${NODE_ENV}/validator/postgresql:/var/lib/postgresql
     healthcheck:
-      test: [ "CMD", "/postgresql/healthcheck.sh" ]
-      interval: 10s
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
+      interval: 3s
       timeout: 5s
-      retries: 5
+      retries: 30
       start_period: 20s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
-  # -----------------------------
-  # MPT DB (Node.js) for Validator
-  # -----------------------------
   mpt-db-validator:
     build:
       context: ..
@@ -43,23 +37,23 @@ services:
     volumes:
       - ../volumes/${NODE_ENV}/validator/mpt/data:/app/data
     healthcheck:
-      test: [ "CMD", "node", "/app/healthcheck.js" ]
-      interval: 10s
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 3s
       timeout: 5s
-      retries: 5
+      retries: 20
       start_period: 20s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
-  # -----------------------------
-  # ABCI App (Quarkus) for Validator
-  # -----------------------------
   app-abci-validator:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/abci/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-validator}_abci_app
+    ports:
+      - "0.0.0.0:3002:3002"
     environment:
       QUARKUS_PROFILE: prod
       APP_ABCI_DB_USER: ${APP_ABCI_DB_USER}
@@ -69,25 +63,22 @@ services:
       TENDERMINT_HOST: validator-node
       MPT_DB_HOST: mpt-db-validator
       CHAIN_ID: ${CHAIN_ID}
-      COIN_SYMBOLE: ${COIN_SYMBOLE}
+      COIN_SYMBOL: ${COIN_SYMBOL}
     depends_on:
       mpt-db-validator:
         condition: service_healthy
       postgres-validator:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "/app/healthcheck.sh" ]
-      interval: 10s
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 30
+      start_period: 10s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
-  # -----------------------------
-  # Validator Node (Tendermint)
-  # -----------------------------
   validator-node:
     build:
       context: ..
@@ -102,15 +93,20 @@ services:
       P2P_PERSISTENT_PEERS: ${P2P_PERSISTENT_PEERS}
       P2P_PRIVATE_PEER_IDS: ${P2P_PRIVATE_PEER_IDS}
       P2P_UNCONDITIONAL_PEERS: ${P2P_UNCONDITIONAL_PEERS}
-    command: [
-      "start",
-      "--proxy_app", tcp://app-abci-validator:26658,
-      "--moniker", "${P2P_NODE_NAME}",
-      "--p2p.seeds", "${P2P_SEEDS}",
-      "--p2p.persistent_peers", "${P2P_PERSISTENT_PEERS}",
-      "--p2p.private_peer_ids", "${P2P_PRIVATE_PEER_IDS}",
-      "--p2p.unconditional_peer_ids", "${P2P_UNCONDITIONAL_PEERS}",
-    ]
+    command:
+      - start
+      - --proxy_app
+      - tcp://app-abci-validator:26658
+      - --moniker
+      - ${P2P_NODE_NAME}
+      - --p2p.seeds
+      - ${P2P_SEEDS}
+      - --p2p.persistent_peers
+      - ${P2P_PERSISTENT_PEERS}
+      - --p2p.private_peer_ids
+      - ${P2P_PRIVATE_PEER_IDS}
+      - --p2p.unconditional_peer_ids
+      - ${P2P_UNCONDITIONAL_PEERS}
     volumes:
       - ../volumes/${NODE_ENV}/tendermint/validator/data:/tendermint/data
       - ../config/tendermint/${NODE_ENV}/genesis.json:/tendermint/config/genesis.json
@@ -118,14 +114,14 @@ services:
       app-abci-validator:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "/healthcheck.sh" ]
-      interval: 10s
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
     networks:
-      graphene-net:
+      - graphene-net
 
 networks:
   graphene-net:
