@@ -99,11 +99,9 @@ services:
       - tcp://app-abci-sentry:26658
       - --moniker
       - ${P2P_NODE_NAME}
-      - --p2p.pex
+      - --p2p.pex=true
       - --p2p.persistent_peers
       - ${P2P_PERSISTENT_PEERS}
-      - --p2p.private_peer_ids
-      - ${P2P_PRIVATE_PEER_IDS}
       - --p2p.unconditional_peer_ids
       - ${P2P_UNCONDITIONAL_PEERS}
     volumes:

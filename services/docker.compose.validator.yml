@@ -97,8 +97,8 @@ services:
       - tcp://app-abci-validator:26658
       - --moniker
       - ${P2P_NODE_NAME}
-      - --p2p.seeds
-      - ${P2P_SEEDS}
+      - --p2p.pex=false
+      - --p2p.seeds=""
       - --p2p.persistent_peers
       - ${P2P_PERSISTENT_PEERS}
       - --p2p.private_peer_ids
