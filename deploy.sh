@@ -119,10 +119,13 @@ print_usage() {
 
 source_env_files() {
     for env_file in "$@"; do
-        if [[ -f "$env_file" ]]; then
-            set -a
-            source <(grep -v '^\s*#' "$env_file" | grep -v '^\s*$')
-            set +a
+        if [ -f "$env_file" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+                case "$line" in
+                    ""|\#*) continue ;;
+                esac
+                export "$line"
+            done < "$env_file"
         fi
     done
 }
