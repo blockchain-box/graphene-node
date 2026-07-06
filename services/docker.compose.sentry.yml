@@ -100,7 +100,6 @@ services:
       - --moniker
       - ${P2P_NODE_NAME}
       - --p2p.pex
-      - --p2p.seed_mode
       - --p2p.persistent_peers
       - ${P2P_PERSISTENT_PEERS}
       - --p2p.private_peer_ids
