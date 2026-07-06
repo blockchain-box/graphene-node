@@ -47,6 +47,7 @@ services:
       - graphene-net
 
   app-abci-validator:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/abci/Dockerfile
