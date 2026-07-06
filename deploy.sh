@@ -117,6 +117,16 @@ print_usage() {
      echo -e "${CYAN}▶${NC} ${BOLD}$1${NC}"
  }
 
+source_env_files() {
+    for env_file in "$@"; do
+        if [[ -f "$env_file" ]]; then
+            set -a
+            source <(grep -v '^\s*#' "$env_file" | grep -v '^\s*$')
+            set +a
+        fi
+    done
+}
+
 validate_command() {
     if ! command -v "$1" >/dev/null 2>&1; then
         print_error "Command '$1' is required but not installed"
@@ -297,6 +307,11 @@ deploy_service() {
     fi
 
     print_info "Starting services with env files: ${env_files[*]}"
+
+    for e in "${env_files[@]}"; do
+        e="${e#--env-file }"
+        source_env_files "$e"
+    done
 
     local start_cmd="$COMPOSE_CMD -f $compose_file ${env_files[*]} -p $project_name up -d $build_arg"
     echo -e "${DIM}Command: $start_cmd${NC}"
