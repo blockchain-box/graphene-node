@@ -52,8 +52,6 @@ services:
       context: ..
       dockerfile: docker/abci/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-validator}_abci_app
-    ports:
-      - "0.0.0.0:3002:3002"
     environment:
       QUARKUS_PROFILE: prod
       APP_ABCI_DB_USER: ${APP_ABCI_DB_USER}
