@@ -369,6 +369,7 @@ validate_configuration() {
 main() {
     # Parse command line arguments
     NODE_ENV="$DEFAULT_NODE_ENV"
+    export NODE_ENV
     STOP_ONLY=false
     RESTART=false
     CLEAN=false
