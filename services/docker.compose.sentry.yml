@@ -18,7 +18,7 @@ services:
       APP_EVM_DB_PASSWORD: ${APP_EVM_DB_PASSWORD}
       APP_EVM_DB_SCHEMA: ${APP_EVM_DB_SCHEMA}
     volumes:
-      - ../volumes/${NODE_ENV}/sentry/postgresql:/var/lib/postgresql
+      - ../volumes/${NODE_ENV}/sentry/postgresql:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
