@@ -5,6 +5,15 @@
 # Cross-platform compatible (Linux, macOS, WSL)
 # ==============================================
 
+# Re-exec with bash if not already running under bash
+if [ -z "${BASH_VERSION:-}" ]; then
+    if command -v bash >/dev/null 2>&1; then
+        exec bash "$0" "$@"
+    fi
+    echo "This script requires bash. Please run with: bash $0" >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 # Detect if output supports colors
@@ -529,16 +538,6 @@ main() {
                   | grep -E "(${DEPLOYMENT_ID}_validator|${DEPLOYMENT_ID}_sentry)" || true
     fi
 }
-
-# Handle bash requirement
-if [ -z "${BASH_VERSION:-}" ]; then
-    # Try to re-exec with bash if available
-    if command -v bash >/dev/null 2>&1; then
-        exec bash "$0" "$@"
-    fi
-    echo "This script requires bash. Please run with: bash $0" >&2
-    exit 1
-fi
 
 # Run main function
 main "$@"
