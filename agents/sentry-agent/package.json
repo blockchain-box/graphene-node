@@ -1,0 +1,27 @@
+{
+  "name": "@grph/sentry-agent",
+  "version": "1.0.0",
+  "description": "Sentry agent sidecar — assignment monitoring, invite-key decryption, GrphClient tunnel, port allocation, persistent_peers rewrite, and Tendermint restart",
+  "private": true,
+  "type": "module",
+  "main": "src/cli.js",
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "vitest run",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@grph-net/client": "file:../../network/client",
+    "@grph-net/utils": "file:../../network/utils",
+    "b4a": "^1.7.3",
+    "commander": "^12.1.0",
+    "dockerode": "^4.0.0",
+    "ethers": "^6.13.0",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}
