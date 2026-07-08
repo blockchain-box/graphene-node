@@ -71,3 +71,5 @@ chain/env/live/.env.sentry
 chain/env/live/.env.validator
 chain/env/test/.env.sentry
 chain/env/test/.env.validator
+
+secrets

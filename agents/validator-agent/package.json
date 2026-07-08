@@ -1,0 +1,33 @@
+{
+  "name": "@grph/validator-agent",
+  "version": "1.0.0",
+  "description": "Validator agent sidecar — keystore, GrphServer, approval monitoring, submitConnectionString",
+  "private": true,
+  "type": "module",
+  "main": "src/cli.js",
+  "scripts": {
+    "start": "node src/cli.js",
+    "init": "node src/cli.js init",
+    "connect": "node src/cli.js connect",
+    "test": "vitest run",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@grph-net/net": "file:../../network/net",
+    "@grph-net/server": "file:../../network/server",
+    "@grph-net/utils": "file:../../network/utils",
+    "b4a": "^1.7.3",
+    "commander": "^12.1.0",
+    "ethers": "^6.13.0",
+    "hypercore-crypto": "^3.6.1",
+    "hyperdht": "^6.27.0",
+    "sodium-universal": "^5.0.1",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
+    "ws": "^8.18.0",
+    "z32": "^1.1.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}

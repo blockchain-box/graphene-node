@@ -121,6 +121,71 @@ services:
     networks:
       - graphene-net
 
+  app-evm-validator:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: docker/evm/Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-validator}_evm_app
+    environment:
+      QUARKUS_PROFILE: prod
+      APP_EVM_DB_USER: ${APP_EVM_DB_USER}
+      APP_EVM_DB_PASSWORD: ${APP_EVM_DB_PASSWORD}
+      APP_EVM_DB_SCHEMA: ${APP_EVM_DB_SCHEMA}
+      APP_ABCI_HOST: app-abci-validator
+      POSTGRESSQL_DB_HOST: postgres-validator
+      TENDERMINT_HOST: validator-node
+      MPT_DB_HOST: mpt-db-validator
+      CHAIN_ID: ${CHAIN_ID}
+      COIN_SYMBOL: ${COIN_SYMBOL}
+    depends_on:
+      postgres-validator:
+        condition: service_healthy
+      app-abci-validator:
+        condition: service_healthy
+      validator-node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - graphene-net
+
+  validator-agent:
+    build:
+      context: ..
+      dockerfile: agents/validator-agent/Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-validator}_agent
+    environment:
+      RPC_URL: http://app-evm-validator:3003
+      WS_URL: ws://app-evm-validator:3003/graphene/tx-watch
+      KEYSTORE_PATH: /app/secrets/keystore.enc
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      CONTRACT_ADDRESS: ${CONTRACT_ADDRESS}
+      AGENT_HOST: '0.0.0.0'
+      AGENT_PORT: '26658'
+      P2P_NODE_NAME: ${P2P_NODE_NAME}
+      P2P_PERSISTENT_PEERS: ${P2P_PERSISTENT_PEERS}
+      P2P_PRIVATE_PEER_IDS: ${P2P_PRIVATE_PEER_IDS}
+      P2P_PEX: 'false'
+      PROXY_APP: tcp://app-abci-validator:26658
+      TENDERMINT_HOME: /tendermint
+    volumes:
+      - ../volumes/${NODE_ENV}/validator/agent/secrets:/app/secrets
+      - ../volumes/${NODE_ENV}/validator/agent/logs:/app/logs
+      - ../volumes/${NODE_ENV}/tendermint/validator/data:/tendermint/data
+      - ../config/tendermint/${NODE_ENV}/genesis.json:/tendermint/config/genesis.json
+    depends_on:
+      app-evm-validator:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - graphene-net
+
 networks:
   graphene-net:
     external: true

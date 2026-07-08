@@ -1,0 +1,23 @@
+{
+  "name": "@grph-net/server",
+  "version": "1.0.0",
+  "description": "Grph P2P server — expose local services via HyperDHT hole-punching",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    }
+  },
+  "dependencies": {
+    "@grph-net/net": "file:../net",
+    "@grph-net/utils": "file:../utils",
+    "b4a": "^1.7.3",
+    "hyperdht": "^6.27.0",
+    "z32": "^1.1.0"
+  }
+}
