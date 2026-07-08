@@ -73,15 +73,3 @@ chain/env/test/.env.sentry
 chain/env/test/.env.validator
 
 secrets
-
-dist
-
-build
-
-# AI agent resources (local only)
-AGENTS.md
-CONTEXT.md
-CONTEXT-MAP.md
-docs/
-.scratch/
-.opencode/

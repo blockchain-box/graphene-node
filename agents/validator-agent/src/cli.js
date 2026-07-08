@@ -67,61 +67,6 @@ async function getPassphrase(config) {
   return promptPassphrase('Enter keystore passphrase: ');
 }
 
-async function promptStderr(prompt) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
-  return new Promise((resolve) => {
-    rl.question(prompt, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
-
-async function getPassphraseStderr(config) {
-  if (config.keystorePassphraseEnv) {
-    return config.keystorePassphraseEnv;
-  }
-  return promptStderr('Enter keystore passphrase: ');
-}
-
-function buildJsonPayload(secrets, moniker, stakeAmount, full) {
-  if (full) {
-    return {
-      agentAddress: secrets.agent.address,
-      nodeId: secrets.tendermint.node.nodeId,
-      networkPublicKey: secrets.tendermint.validator.publicKey.value,
-      encryptionPublicKey: secrets.x25519.publicKey,
-      moniker,
-      stakeAmount,
-      grphInviteKey: secrets.grph.invite,
-      grphPublicKey: secrets.grph.keyPair.publicKey,
-      validatorAddress: secrets.tendermint.validator.address,
-    };
-  }
-  return {
-    grphInviteKey: secrets.grph.invite,
-    grphDhtPublicKey: secrets.grph.keyPair.publicKey,
-    agentAddress: secrets.agent.address,
-    x25519PublicKey: secrets.x25519.publicKey,
-    tendermintValidatorAddress: secrets.tendermint.validator.address,
-    tendermintNodeId: secrets.tendermint.node.nodeId,
-    moniker,
-  };
-}
-
-function validateMoniker(moniker) {
-  if (!moniker) return false;
-  return moniker.length >= 1 && moniker.length <= 64;
-}
-
-function validateStakeAmount(stakeAmount) {
-  const parsed = parseFloat(stakeAmount);
-  return !isNaN(parsed) && parsed > 0;
-}
-
 program
   .name('validator-agent')
   .description('Graphene Validator Agent — sidecar for validator nodes')
@@ -130,199 +75,36 @@ program
 program
   .command('init')
   .description('Generate all keys and save to encrypted keystore')
-  .option('--json', 'Output machine-readable JSON payload to stdout')
-  .option('--full', 'Include all 9 registration fields (use with --json)')
-  .action(async (options) => {
+  .action(async () => {
     const config = resolveConfig();
-
-    if (!options.json) {
-      logger.info('Generating validator keys...');
-      logger.info('Tip: use --json for machine-readable output');
-
-      try {
-        const secrets = generateAll();
-
-        const passphrase1 = await getPassphrase(config);
-        const passphrase2 = config.keystorePassphraseEnv
-          ? passphrase1
-          : await promptPassphrase('Confirm keystore passphrase: ');
-
-        if (passphrase1 !== passphrase2) {
-          logger.error('Passphrases do not match');
-          process.exit(1);
-        }
-
-        saveKeystore(secrets, passphrase1, config.keystorePath);
-
-        logger.info('=== Keys Generated ===');
-        logger.info(`Grph invite key: ${secrets.grph.invite}`);
-        logger.info(`Grph DHT public key: ${secrets.grph.keyPair.publicKey}`);
-        logger.info(`Agent Ethereum address: ${secrets.agent.address}`);
-        logger.info(`X25519 public key: ${secrets.x25519.publicKey}`);
-        logger.info(`Tendermint validator address: ${secrets.tendermint.validator.address}`);
-        logger.info(`Tendermint node ID: ${secrets.tendermint.node.nodeId}`);
-        logger.info('========================');
-        logger.info('Keystore saved. Keep your passphrase safe.');
-      } catch (err) {
-        logger.error(`Init failed: ${err.message}`);
-        process.exit(1);
-      }
-      return;
-    }
+    logger.info('Generating validator keys...');
 
     try {
-      let lineResolve = null;
-      const lineQueue = [];
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stderr,
-      });
-
-      rl.on('line', (line) => {
-        if (lineResolve) {
-          const cb = lineResolve;
-          lineResolve = null;
-          cb(line.trim());
-        } else {
-          lineQueue.push(line.trim());
-        }
-      });
-
-      const question = (prompt) => {
-        process.stderr.write(prompt);
-        return new Promise((resolve) => {
-          if (lineQueue.length > 0) {
-            resolve(lineQueue.shift());
-          } else {
-            lineResolve = resolve;
-          }
-        });
-      };
-
-      const moniker = await question('Enter moniker (1-64 chars): ');
-      if (!validateMoniker(moniker)) {
-        process.stderr.write('Error: moniker must be 1-64 characters\n');
-        rl.close();
-        process.exit(1);
-      }
-
-      const stakeAmount = await question('Enter stake amount (positive decimal): ');
-      if (!validateStakeAmount(stakeAmount)) {
-        process.stderr.write('Error: stakeAmount must be a positive decimal\n');
-        rl.close();
-        process.exit(1);
-      }
-
       const secrets = generateAll();
 
-      let passphrase1;
-      if (config.keystorePassphraseEnv) {
-        passphrase1 = config.keystorePassphraseEnv;
-      } else {
-        passphrase1 = await question('Enter keystore passphrase: ');
-      }
-
-      let passphrase2;
-      if (config.keystorePassphraseEnv) {
-        passphrase2 = passphrase1;
-      } else {
-        passphrase2 = await question('Confirm keystore passphrase: ');
-      }
-
-      rl.close();
+      const passphrase1 = await getPassphrase(config);
+      const passphrase2 = config.keystorePassphraseEnv
+        ? passphrase1
+        : await promptPassphrase('Confirm keystore passphrase: ');
 
       if (passphrase1 !== passphrase2) {
-        process.stderr.write('Error: passphrases do not match\n');
+        logger.error('Passphrases do not match');
         process.exit(1);
       }
 
-      saveKeystore(secrets, passphrase1, config.keystorePath, true);
+      saveKeystore(secrets, passphrase1, config.keystorePath);
 
-      const full = options.full === true;
-      const payload = buildJsonPayload(secrets, moniker, stakeAmount, full);
-      process.stdout.write(JSON.stringify(payload) + '\n');
-
-      process.stderr.write('\nValidator keys generated. JSON payload written to stdout.\n');
-      process.stderr.write('Copy the JSON above and paste it into the form\'s "Import" step.\n');
+      logger.info('=== Keys Generated ===');
+      logger.info(`Grph invite key: ${secrets.grph.invite}`);
+      logger.info(`Grph DHT public key: ${secrets.grph.keyPair.publicKey}`);
+      logger.info(`Agent Ethereum address: ${secrets.agent.address}`);
+      logger.info(`X25519 public key: ${secrets.x25519.publicKey}`);
+      logger.info(`Tendermint validator address: ${secrets.tendermint.validator.address}`);
+      logger.info(`Tendermint node ID: ${secrets.tendermint.node.nodeId}`);
+      logger.info('========================');
+      logger.info('Keystore saved. Keep your passphrase safe.');
     } catch (err) {
-      process.stderr.write(`Error: ${err.message}\n`);
-      process.exit(1);
-    }
-  });
-
-program
-  .command('export')
-  .description('Load keystore and re-output JSON payload')
-  .option('--json', 'Output machine-readable JSON payload to stdout')
-  .option('--full', 'Include all 9 registration fields (use with --json)')
-  .action(async (options) => {
-    if (!options.json) {
-      process.stderr.write('Error: --json flag is required\n');
-      process.stderr.write('Usage: validator-agent export --json\n');
-      process.exit(1);
-    }
-
-    const config = resolveConfig();
-
-    try {
-      let lineResolve = null;
-      const lineQueue = [];
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stderr,
-      });
-
-      rl.on('line', (line) => {
-        if (lineResolve) {
-          const cb = lineResolve;
-          lineResolve = null;
-          cb(line.trim());
-        } else {
-          lineQueue.push(line.trim());
-        }
-      });
-
-      const question = (prompt) => {
-        process.stderr.write(prompt);
-        return new Promise((resolve) => {
-          if (lineQueue.length > 0) {
-            resolve(lineQueue.shift());
-          } else {
-            lineResolve = resolve;
-          }
-        });
-      };
-
-      let passphrase;
-      if (config.keystorePassphraseEnv) {
-        passphrase = config.keystorePassphraseEnv;
-      } else {
-        passphrase = await question('Enter keystore passphrase: ');
-      }
-
-      const secrets = loadKeystore(config.keystorePath, passphrase);
-
-      const moniker = await question('Enter moniker (1-64 chars): ');
-      if (!validateMoniker(moniker)) {
-        process.stderr.write('Error: moniker must be 1-64 characters\n');
-        rl.close();
-        process.exit(1);
-      }
-
-      const stakeAmount = await question('Enter stake amount (positive decimal): ');
-      if (!validateStakeAmount(stakeAmount)) {
-        process.stderr.write('Error: stakeAmount must be a positive decimal\n');
-        rl.close();
-        process.exit(1);
-      }
-
-      rl.close();
-
-      const full = options.full === true;
-      const payload = buildJsonPayload(secrets, moniker, stakeAmount, full);
-      process.stdout.write(JSON.stringify(payload) + '\n');
-    } catch (err) {
-      process.stderr.write(`Error: ${err.message}\n`);
+      logger.error(`Init failed: ${err.message}`);
       process.exit(1);
     }
   });
@@ -444,8 +226,4 @@ program
     logger.info('Run: docker compose pull validator-agent && docker compose up -d validator-agent');
   });
 
-if (!process.env.VITEST && !process.env.VITEST_WORKER_ID) {
-  program.parse(process.argv);
-}
-
-export { buildJsonPayload, validateMoniker, validateStakeAmount };
+program.parse(process.argv);

@@ -41,7 +41,7 @@ export function decryptSecrets(encryptedData, passphrase) {
   return JSON.parse(decrypted.toString('utf8'));
 }
 
-export function saveKeystore(secrets, passphrase, keystorePath, silent) {
+export function saveKeystore(secrets, passphrase, keystorePath) {
   const encrypted = encryptSecrets(secrets, passphrase);
   const dir = path.dirname(keystorePath);
   if (!fs.existsSync(dir)) {
@@ -49,9 +49,7 @@ export function saveKeystore(secrets, passphrase, keystorePath, silent) {
   }
   fs.writeFileSync(keystorePath, encrypted);
   fs.chmodSync(keystorePath, 0o600);
-  if (!silent) {
-    logger.info(`Keystore saved to ${keystorePath}`);
-  }
+  logger.info(`Keystore saved to ${keystorePath}`);
 }
 
 export function loadKeystore(keystorePath, passphrase) {
