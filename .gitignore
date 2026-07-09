@@ -73,3 +73,7 @@ chain/env/test/.env.sentry
 chain/env/test/.env.validator
 
 secrets
+
+dist
+
+build
