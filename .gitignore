@@ -77,3 +77,11 @@ secrets
 dist
 
 build
+
+# AI agent resources (local only)
+AGENTS.md
+CONTEXT.md
+CONTEXT-MAP.md
+docs/
+.scratch/
+.opencode/
