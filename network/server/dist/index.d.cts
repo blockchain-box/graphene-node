@@ -2,6 +2,7 @@ import HyperDHT, { KeyPair } from 'hyperdht';
 import { Logger, pipeTcpServer } from '@grph-net/net';
 
 interface ServerOptions {
+    bootstrap?: string[];
     logger?: Logger;
     silent?: boolean;
     secure?: boolean;

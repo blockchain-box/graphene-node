@@ -21,7 +21,7 @@ var GrphServer = class {
     this.logger = opts.silent ? { log: () => {
     } } : opts.logger || { log: () => {
     } };
-    this.dht = new HyperDHT();
+    this.dht = new HyperDHT(opts.bootstrap ? { bootstrap: opts.bootstrap } : void 0);
     this.stats = {};
     this.server = null;
     this.keyPair = null;

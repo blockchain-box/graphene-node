@@ -73,3 +73,35 @@ chain/env/test/.env.sentry
 chain/env/test/.env.validator
 
 secrets
+
+dist
+
+build
+
+# AI agent resources (local only)
+AGENTS.md
+CONTEXT.md
+CONTEXT-MAP.md
+docs/
+.scratch/
+.checkpoints/
+.opencode/
+
+# Local agent tooling, generated knowledge graphs and design review notes
+CLAUDE.md
+GEMINI.md
+.claude/
+.codex/
+graphify-out/
+/design-qa.md
+
+# Update documentation is maintained in README.md
+/UPDATES.md
+
+# Project documentation is consolidated in the root README.md
+/OPERATOR_GUIDE.md
+/CHECKPOINTS.md
+/JOIN_NETWORK.md
+/OPERATOR_DISTRIBUTION.md
+/agents/validator-agent/README.md
+/agents/sentry-agent/README.md

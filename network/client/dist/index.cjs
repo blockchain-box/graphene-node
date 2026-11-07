@@ -62,7 +62,7 @@ var GrphClient = class {
     } else {
       this.publicKey = import_z32.default.decode(this.seed);
     }
-    this.dht = new import_hyperdht.default({ keyPair: this.keyPair });
+    this.dht = new import_hyperdht.default({ keyPair: this.keyPair, ...opts.bootstrap ? { bootstrap: opts.bootstrap } : {} });
     this.stats = {};
     this.proxy = null;
     this.clients = null;

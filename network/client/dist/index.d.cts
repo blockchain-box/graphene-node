@@ -2,6 +2,7 @@ import HyperDHT, { KeyPair } from 'hyperdht';
 import { Logger, createTcpProxy, createUdpFramedProxy } from '@grph-net/net';
 
 interface ClientOptions {
+    bootstrap?: string[];
     logger?: Logger;
     silent?: boolean;
     key: string;

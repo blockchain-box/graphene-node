@@ -16,6 +16,20 @@
     "tweetnacl": "^1.0.3",
     "tweetnacl-util": "^0.15.1",
     "commander": "^12.1.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "@grph-net/client": "file:./network/client"
+  },
+  "scripts": {
+    "update": "node scripts/update-cli.js",
+    "test:update:e2e": "node scripts/update-e2e.js",
+    "checkpoint": "node scripts/checkpoint-cli.js",
+    "test:checkpoint": "node --test scripts/checkpoint.test.js",
+    "doctor": "node scripts/operator-doctor.js",
+    "package:operator-kit": "python3 scripts/package-operator-kit.py",
+    "join": "GRAPHENE_P2P_SHARE=1 node scripts/join-network.js",
+    "test:join": "node --test scripts/join-network.test.js",
+    "package:explorer": "node scripts/package-explorer.js",
+    "join:sentry": "node scripts/join-sentry.js",
+    "test": "node --test scripts/*.test.js"
   }
 }

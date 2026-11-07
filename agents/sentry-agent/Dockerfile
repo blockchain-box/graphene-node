@@ -1,11 +1,12 @@
-FROM node:lts-alpine
+FROM node:24-bookworm-slim
 
 WORKDIR /app
 
-RUN apk add --no-cache bash curl docker-cli
+RUN apt-get update && apt-get install -y --no-install-recommends bash curl ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY package.json /app/package.json
 COPY network/ /app/network/
+COPY agents/lib/ /app/agents/lib/
 
 RUN npm install
 

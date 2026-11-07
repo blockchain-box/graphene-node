@@ -10,7 +10,10 @@ import { randomBytes, toHex, logger } from './utils.js';
 import { PortAllocator } from './port-allocator.js';
 import { TunnelManager } from './tunnel-manager.js';
 import { AssignmentMonitor } from './monitor.js';
+import { startAgentUpdates } from '../../lib/update-worker.js';
+import { loadKeystore } from '../../lib/keystore.js';
 
+if (process.send) process.once('disconnect', () => process.kill(process.pid, 'SIGTERM'));
 const program = new Command();
 
 function defaultSecretsPath() {
@@ -21,7 +24,10 @@ function defaultSecretsPath() {
 
 function resolveConfig() {
   return {
-    rpcUrl: process.env.RPC_URL || 'http://app-evm-sentry:3003',
+    proxyHost: process.env.PROXY_HOST || '127.0.0.1',
+    peerHost: process.env.PEER_HOST || '127.0.0.1',
+    tendermintRpcUrl: process.env.TENDERMINT_RPC_URL || null,
+    rpcUrl: process.env.RPC_URL || 'http://app-evm-sentry:3003/graphene-evm/rpc',
     wsUrl: process.env.WS_URL || null,
     secretsPath: defaultSecretsPath(),
     portRangeStart: parseInt(process.env.PORT_RANGE_START || '40001', 10),
@@ -39,8 +45,10 @@ async function loadSecrets(config) {
   if (!fs.existsSync(config.secretsPath)) {
     throw new Error(`Secrets file not found at ${config.secretsPath}. Run 'sentry-agent init' first.`);
   }
-  const data = JSON.parse(fs.readFileSync(config.secretsPath, 'utf8'));
-  return data;
+  const bytes = fs.readFileSync(config.secretsPath);
+  if (bytes[0] === 123) return JSON.parse(bytes.toString('utf8'));
+  if (!process.env.KEYSTORE_PASSPHRASE) throw new Error('Enter your node password using KEYSTORE_PASSPHRASE to unlock the sentry.');
+  return loadKeystore(config.secretsPath, process.env.KEYSTORE_PASSPHRASE);
 }
 
 program
@@ -98,6 +106,8 @@ program
     logger.init(config.logPath);
 
     logger.info('=== Sentry Agent Starting ===');
+    const updates = await startAgentUpdates({ role: 'sentry', log: message => logger.warn(message) });
+    config.updateStatus = () => updates.status?.() || { enabled: false, error: updates.error };
     logger.info(`RPC URL: ${config.rpcUrl}`);
     logger.info(`Tendermint container: ${config.tendermintContainer}`);
 
@@ -106,6 +116,7 @@ program
       secrets = await loadSecrets(config);
     } catch (err) {
       logger.error(err.message);
+      await updates.close();
       process.exit(1);
     }
 
@@ -131,6 +142,7 @@ program
     process.on('SIGINT', async () => {
       logger.info('Received SIGINT, shutting down...');
       monitor.stop();
+      await updates.close();
       await tunnelManager.disconnectAll();
       process.exit(0);
     });
@@ -138,6 +150,7 @@ program
     process.on('SIGTERM', async () => {
       logger.info('Received SIGTERM, shutting down...');
       monitor.stop();
+      await updates.close();
       await tunnelManager.disconnectAll();
       process.exit(0);
     });

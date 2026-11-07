@@ -1,19 +1,22 @@
 import fs from 'fs';
 import path from 'path';
-import { GrphClient } from '@grph-net/client';
+import { openGrphClient } from '../../lib/grph-tunnel.js';
 import nacl from 'tweetnacl';
 import naclUtil from 'tweetnacl-util';
 import { fromHex, toHex, logger } from './utils.js';
 import { addPeer, removePeer } from './config-writer.js';
 import { restartContainer } from './docker.js';
+import { dialPeer, peerConnections } from './peer-rpc.js';
 
 export class TunnelManager {
-  constructor(config, secrets, portAllocator) {
+  constructor(config, secrets, portAllocator, { openTunnel = openGrphClient } = {}) {
+    this.openTunnel = openTunnel;
     this.config = config;
     this.secrets = secrets;
     this.portAllocator = portAllocator;
     this.clients = new Map();
     this.statePath = config.statePath || '/app/state/tunnels.json';
+    this._restartTimer = null;
   }
 
   openInviteKey(encryptedConnectionString) {
@@ -43,10 +46,22 @@ export class TunnelManager {
     }
   }
 
+  _scheduleRestart() {
+    if (this._restartTimer) {
+      clearTimeout(this._restartTimer);
+    }
+    this._restartTimer = setTimeout(async () => {
+      this._restartTimer = null;
+      await restartContainer(this.config.tendermintContainer);
+    }, 1000);
+  }
+
   async connect(validatorId, encryptedConnectionString, validatorPeer) {
     if (this.clients.has(validatorId)) {
       logger.warn(`Already connected to validator ${validatorId}`);
-      return this.clients.get(validatorId);
+      const entry = this.clients.get(validatorId);
+      await this.ensurePeer(entry);
+      return entry;
     }
 
     logger.info(`Establishing tunnel to validator ${validatorId}`);
@@ -55,30 +70,14 @@ export class TunnelManager {
 
     const port = this.portAllocator.allocate(validatorId);
 
-    const client = new GrphClient({
-      key: inviteKey,
-      silent: false,
-    });
-
-    client.logger = {
-      log: (entry) => {
-        logger.info(`[GrphClient:${validatorId}] ${entry.msg}`);
-      },
-    };
-
+    let client;
+    const transport = 'grph';
     try {
-      await client.connect(
-        {
-          host: '127.0.0.1',
-          port,
-        },
-        () => {
-          logger.info(`Tunnel to validator ${validatorId} connected on 127.0.0.1:${port}`);
-        },
-      );
-
+      const tunnel = await this.openTunnel(inviteKey, { host: this.config.proxyHost || '127.0.0.1', port });
+      client = tunnel.client;
       this.clients.set(validatorId, {
         client,
+        transport,
         port,
         peer: validatorPeer,
         inviteKey,
@@ -87,7 +86,9 @@ export class TunnelManager {
 
       this._saveState();
 
-      if (validatorPeer) {
+      if (validatorPeer && this.config.tendermintRpcUrl) {
+        await this.ensurePeer(this.clients.get(validatorId));
+      } else if (validatorPeer) {
         const changed = addPeer(
           this.config.tendermintConfigPath,
           validatorPeer.nodeId,
@@ -96,12 +97,14 @@ export class TunnelManager {
         );
 
         if (changed) {
-          await restartContainer(this.config.tendermintContainer);
+          this._scheduleRestart();
         }
       }
 
       return { client, port };
     } catch (err) {
+      try { await client?.destroy(); } catch {}
+      this.clients.delete(validatorId);
       this.portAllocator.release(validatorId);
       logger.error(`Failed to connect tunnel for ${validatorId}: ${err.message}`);
       throw err;
@@ -126,7 +129,7 @@ export class TunnelManager {
     this.portAllocator.release(validatorId);
     this.clients.delete(validatorId);
 
-    if (entry.peer) {
+    if (entry.peer && !this.config.tendermintRpcUrl) {
       const changed = removePeer(
         this.config.tendermintConfigPath,
         entry.peer.nodeId,
@@ -135,7 +138,7 @@ export class TunnelManager {
       );
 
       if (changed) {
-        await restartContainer(this.config.tendermintContainer);
+        this._scheduleRestart();
       }
     }
 
@@ -143,7 +146,19 @@ export class TunnelManager {
     return true;
   }
 
+  async ensurePeer(entry) {
+    if (!this.config.tendermintRpcUrl || !entry?.peer?.nodeId) return;
+    const status = await peerConnections(this.config, new Map([['peer', entry]]));
+    if (!status[0]?.peerConnected) await dialPeer(this.config, entry.peer.nodeId, entry.port);
+  }
+
+  async connectionStatus() {
+    if (!this.config.tendermintRpcUrl) return [];
+    return peerConnections(this.config, this.clients);
+  }
+
   async disconnectAll() {
+    if (this._restartTimer) { clearTimeout(this._restartTimer); this._restartTimer = null; }
     for (const [validatorId] of this.clients) {
       await this.disconnect(validatorId);
     }
@@ -160,7 +175,7 @@ export class TunnelManager {
   getPeers() {
     const peers = [];
     for (const [validatorId, entry] of this.clients) {
-      if (entry.peer) {
+      if (entry.peer && !this.config.tendermintRpcUrl) {
         peers.push(entry.peer);
       }
     }

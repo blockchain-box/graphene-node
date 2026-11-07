@@ -1,0 +1,13 @@
+.git
+**/node_modules
+secrets
+**/secrets
+volumes
+.scratch
+.checkpoints
+checkpoint-cache
+**/keystore.enc
+**/sentry-secrets.json
+**/launcher.json
+**/runtime
+**/agent.log

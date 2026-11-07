@@ -161,13 +161,14 @@ services:
       dockerfile: agents/validator-agent/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-validator}_agent
     environment:
-      RPC_URL: http://app-evm-validator:3003
-      WS_URL: ws://app-evm-validator:3003/graphene/tx-watch
+      RPC_URL: http://app-evm-validator:3003/graphene-evm/rpc
+      WS_URL: ws://app-evm-validator:3003/graphene-evm/graphene/tx-watch
       KEYSTORE_PATH: /app/secrets/keystore.enc
       KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS}
-      AGENT_HOST: '0.0.0.0'
-      AGENT_PORT: '26658'
+      AGENT_HOST: validator-node
+      AGENT_PORT: '26656'
+      MANAGE_TENDERMINT: 'false'
       P2P_NODE_NAME: ${P2P_NODE_NAME}
       P2P_PERSISTENT_PEERS: ${P2P_PERSISTENT_PEERS}
       P2P_PRIVATE_PEER_IDS: ${P2P_PRIVATE_PEER_IDS}

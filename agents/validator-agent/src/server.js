@@ -1,4 +1,5 @@
 import { GrphServer } from '@grph-net/server';
+import { dhtBootstrap } from '../../lib/grph-tunnel.js';
 import { logger } from './utils.js';
 import { spawn } from 'child_process';
 
@@ -13,18 +14,21 @@ export async function startGrphServer(config, secrets) {
 
   serverInstance = new GrphServer({
     silent: false,
+    bootstrap: dhtBootstrap(),
   });
 
   serverInstance.logger = {
     log: (entry) => {
-      logger.info(`[GrphServer] ${entry.msg}`);
+      // The transport library logs its private seed during startup. Never persist it.
+      const message = String(entry.msg).replaceAll(secrets.grph.seed, '[redacted]');
+      logger.info(`[GrphServer] ${message}`);
     },
   };
 
   await serverInstance.start({
     seed: secrets.grph.seed,
     host: config.agentHost || '127.0.0.1',
-    port: parseInt(config.agentPort || '26658', 10),
+    port: parseInt(config.agentPort || '26656', 10),
     udp: config.agentProtocol === 'udp',
   });
 

@@ -9,6 +9,10 @@ export interface AccountState {
 }
 
 export interface Validator {
+  exitRequestedHeight?: string | number | null;
+  exitEffectiveHeight?: string | number | null;
+  withdrawableHeight?: string | number | null;
+  lastSignedHeight?: string | number | null;
   operatorAddress: string;
   consensusPubKey: string;
   jailed: boolean;

@@ -41,8 +41,8 @@ export function generateAgentEthKey() {
 
 export function generateTendermintValidatorKey() {
   const pair = nacl.sign.keyPair();
-  const address = crypto.createHash('ripemd160')
-    .update(crypto.createHash('sha256').update(Buffer.from(pair.publicKey)).digest())
+  const address = crypto.createHash('sha256')
+    .update(Buffer.from(pair.publicKey))
     .digest()
     .slice(0, 20);
 

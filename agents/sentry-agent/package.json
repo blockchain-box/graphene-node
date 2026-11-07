@@ -13,6 +13,7 @@
   "dependencies": {
     "@grph-net/client": "file:../../network/client",
     "@grph-net/utils": "file:../../network/utils",
+    "@grph/agent-lib": "file:../lib",
     "b4a": "^1.7.3",
     "commander": "^12.1.0",
     "dockerode": "^4.0.0",

@@ -176,7 +176,7 @@ check_docker() {
     if ! docker info >/dev/null 2>&1; then
         print_error "Docker daemon is not running or not accessible"
         print_info "Make sure Docker is installed and running"
-        print_info "On Windows, ensure Docker Desktop is running"
+        print_info "On Windows, ensure Docker is running"
         print_info "On Linux/macOS, try: sudo systemctl start docker"
         exit 1
     fi

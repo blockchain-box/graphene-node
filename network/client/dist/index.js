@@ -27,7 +27,7 @@ var GrphClient = class {
     } else {
       this.publicKey = z32.decode(this.seed);
     }
-    this.dht = new HyperDHT({ keyPair: this.keyPair });
+    this.dht = new HyperDHT({ keyPair: this.keyPair, ...opts.bootstrap ? { bootstrap: opts.bootstrap } : {} });
     this.stats = {};
     this.proxy = null;
     this.clients = null;

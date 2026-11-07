@@ -56,7 +56,7 @@ var GrphServer = class {
     this.logger = opts.silent ? { log: () => {
     } } : opts.logger || { log: () => {
     } };
-    this.dht = new import_hyperdht.default();
+    this.dht = new import_hyperdht.default(opts.bootstrap ? { bootstrap: opts.bootstrap } : void 0);
     this.stats = {};
     this.server = null;
     this.keyPair = null;

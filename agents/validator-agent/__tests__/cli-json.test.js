@@ -61,12 +61,13 @@ describe('validateStakeAmount', () => {
 });
 
 describe('buildJsonPayload (form mode, full=false)', () => {
-  it('returns all 7 form-compatible fields', () => {
+  it('returns all public form fields', () => {
     const secrets = generateAll();
     const payload = buildJsonPayload(secrets, 'test-validator', '500.25', false);
 
     expect(payload).toHaveProperty('grphInviteKey');
     expect(payload).toHaveProperty('grphDhtPublicKey');
+    expect(payload.tendermintValidatorPublicKey).toBe(secrets.tendermint.validator.publicKey.value);
     expect(payload).toHaveProperty('agentAddress');
     expect(payload).toHaveProperty('x25519PublicKey');
     expect(payload).toHaveProperty('tendermintValidatorAddress');
@@ -74,7 +75,7 @@ describe('buildJsonPayload (form mode, full=false)', () => {
     expect(payload).toHaveProperty('moniker');
 
     const keys = Object.keys(payload);
-    expect(keys).toHaveLength(7);
+    expect(keys).toHaveLength(8);
   });
 
   it('maps grphInviteKey correctly', () => {
@@ -136,8 +137,9 @@ describe('buildJsonPayload (form mode, full=false)', () => {
     const secrets = generateAll();
     const payload = buildJsonPayload(secrets, 'v', '1');
 
-    expect(Object.keys(payload)).toHaveLength(7);
+    expect(Object.keys(payload)).toHaveLength(8);
     expect(payload).toHaveProperty('grphDhtPublicKey');
+    expect(payload.tendermintValidatorPublicKey).toBe(secrets.tendermint.validator.publicKey.value);
   });
 
   it('produces valid JSON when serialized', () => {

@@ -16,6 +16,7 @@
     "@grph-net/net": "file:../../network/net",
     "@grph-net/server": "file:../../network/server",
     "@grph-net/utils": "file:../../network/utils",
+    "@grph/agent-lib": "file:../lib",
     "b4a": "^1.7.3",
     "commander": "^12.1.0",
     "ethers": "^6.13.0",

@@ -17,6 +17,10 @@ import {
 } from './server.js';
 import { ApprovalMonitor } from './monitor.js';
 import { logger } from './utils.js';
+import { startAgentUpdates } from '../../lib/update-worker.js';
+
+// A launcher-owned agent exits when its parent closes, including an abrupt launcher exit.
+if (process.send) process.once('disconnect', () => process.kill(process.pid, 'SIGTERM'));
 
 const program = new Command();
 
@@ -28,13 +32,15 @@ function defaultKeystorePath() {
 
 function resolveConfig() {
   return {
-    rpcUrl: process.env.RPC_URL || 'http://app-evm-validator:3003',
+    rpcUrl: process.env.RPC_URL || 'http://app-evm-validator:3003/graphene-evm/rpc',
     wsUrl: process.env.WS_URL || null,
     keystorePath: defaultKeystorePath(),
     keystorePassphraseEnv: process.env.KEYSTORE_PASSPHRASE || null,
     contractAddress: process.env.CONTRACT_ADDRESS || '',
     agentHost: process.env.AGENT_HOST || '127.0.0.1',
-    agentPort: process.env.AGENT_PORT || '26658',
+    agentPort: process.env.AGENT_PORT || '26656',
+    manageTendermint: process.env.MANAGE_TENDERMINT !== 'false',
+    managePeers: process.env.MANAGE_PEERS !== 'false',
     agentProtocol: process.env.AGENT_PROTOCOL || 'tcp',
     tendermintHome: process.env.TENDERMINT_HOME || '/tendermint',
     proxyApp: process.env.PROXY_APP || 'tcp://app-abci-validator:26658',
@@ -104,6 +110,7 @@ function buildJsonPayload(secrets, moniker, stakeAmount, full) {
   return {
     grphInviteKey: secrets.grph.invite,
     grphDhtPublicKey: secrets.grph.keyPair.publicKey,
+    tendermintValidatorPublicKey: secrets.tendermint.validator.publicKey.value,
     agentAddress: secrets.agent.address,
     x25519PublicKey: secrets.x25519.publicKey,
     tendermintValidatorAddress: secrets.tendermint.validator.address,
@@ -333,6 +340,8 @@ program
   .action(async () => {
     const config = resolveConfig();
     logger.info('Starting validator agent...');
+    const updates = await startAgentUpdates({ role: 'validator', log: message => logger.warn(message) });
+    config.updateStatus = () => updates.status?.() || { enabled: false, error: updates.error };
 
     try {
       const passphrase = await getPassphrase(config);
@@ -345,8 +354,10 @@ program
       await startGrphServer(config, secrets);
       logger.info('GrphServer started');
 
-      startTendermint(config, secrets);
-      logger.info('Tendermint started');
+      if (config.manageTendermint) {
+        startTendermint(config, secrets);
+        logger.info('Tendermint started');
+      }
 
       const monitor = new ApprovalMonitor(config, secrets);
       await monitor.start();
@@ -354,6 +365,7 @@ program
       const shutdown = async () => {
         logger.info('Shutting down...');
         monitor.stop();
+        await updates.close();
         stopTendermint();
         await stopGrphServer();
         logger.info('Validator agent stopped');
@@ -366,6 +378,7 @@ program
       logger.info('Validator agent running. Press Ctrl+C to stop.');
     } catch (err) {
       logger.error(`Connect failed: ${err.message}`);
+      await updates.close();
       process.exit(1);
     }
   });
