@@ -1,4 +1,4 @@
-import { Observable } from 'rxjs';
+import { Observable, Subscription } from 'rxjs';
 
 interface Coin {
     denom: string;
@@ -9,6 +9,10 @@ interface AccountState {
     nonce: string;
 }
 interface Validator {
+    exitRequestedHeight?: string | number | null;
+    exitEffectiveHeight?: string | number | null;
+    withdrawableHeight?: string | number | null;
+    lastSignedHeight?: string | number | null;
     operatorAddress: string;
     consensusPubKey: string;
     jailed: boolean;
@@ -36,9 +40,25 @@ interface VaultBalances {
     onMarket: Coin;
     deposited: Coin;
 }
-interface TokenInfo {
-    chainId: string;
+interface TokenHolder {
     address: string;
+    balance: string;
+}
+interface TokenInfo {
+    mintPolicy?: MintPolicy;
+    name?: string;
+    creator?: string;
+    creationNonce?: string;
+    totalSupply: string;
+    chainId: number;
+    address: {
+        address: string;
+        value?: string;
+        bytes?: number[];
+        zero?: boolean;
+    };
+    logoURI?: string;
+    marked: boolean;
     symbol: string;
     decimals: number;
 }
@@ -46,7 +66,15 @@ interface Tenant {
     owner: string;
     name: string;
 }
+interface PaginatedResponse<T> {
+    items: T[];
+    totalCount: number;
+    page: number;
+    size: number;
+}
 interface ChainConfig {
+    governance?: GovernanceConfig;
+    tokenCreationFee: string | null;
     chainId: string;
     minStake: string;
     minDelegate: string;
@@ -138,6 +166,67 @@ interface TxWatchError {
     message: string;
 }
 type TxWatchMessage = TxWatchReady | TxWatchTimeout | TxWatchError;
+type SyncDomain = 'account' | 'stake' | 'token' | 'vault' | 'config' | 'tenant' | 'platform' | 'attest';
+interface StateWatchSubscribe {
+    type: 'subscribe';
+    domain: SyncDomain;
+    scope?: {
+        addresses: string[];
+    };
+    lastBlock?: number;
+}
+interface StateWatchUnsubscribe {
+    type: 'unsubscribe';
+    domain: SyncDomain;
+}
+interface StateWatchNextPage {
+    type: 'nextPage';
+    domain: SyncDomain;
+    cursor: string;
+}
+type StateWatchClientMessage = StateWatchSubscribe | StateWatchUnsubscribe | StateWatchNextPage;
+interface StateWatchEntity {
+    kind: string;
+    uid: string;
+    entity: Record<string, unknown>;
+}
+interface StateWatchSnapshot {
+    type: 'snapshot';
+    domain: SyncDomain;
+    blockNumber: number;
+    entities: StateWatchEntity[];
+}
+interface StateWatchSnapshotPage {
+    type: 'snapshotPage';
+    domain: SyncDomain;
+    blockNumber: number;
+    entities: StateWatchEntity[];
+    nextCursor: string;
+    hasMore: boolean;
+}
+interface StateWatchSnapshotComplete {
+    type: 'snapshotComplete';
+    domain: SyncDomain;
+    blockNumber: number;
+}
+interface StateWatchChangeEntry {
+    kind: string;
+    uid: string;
+    action: 'UPSERT' | 'DELETE';
+    entity?: Record<string, unknown>;
+}
+interface StateWatchStateChange {
+    type: 'stateChange';
+    domain: SyncDomain;
+    blockNumber: number;
+    changes: StateWatchChangeEntry[];
+}
+interface StateWatchError {
+    type: 'error';
+    message: string;
+}
+type StateWatchServerMessage = StateWatchSnapshot | StateWatchStateChange | StateWatchError | StateWatchSnapshotPage | StateWatchSnapshotComplete;
+type StateWatchDomainMessage = Omit<StateWatchSnapshot, 'type'> | Omit<StateWatchStateChange, 'type'> | Omit<StateWatchSnapshotPage, 'type'> | Omit<StateWatchSnapshotComplete, 'type'>;
 interface NewBlockMessage {
     type: 'newBlock';
     block: {
@@ -263,6 +352,7 @@ interface GrphClientConfig {
     ws: {
         txWatch: boolean;
         blocks: boolean;
+        stateWatch: boolean;
     };
     reconnect: {
         enabled: boolean;
@@ -272,11 +362,102 @@ interface GrphClientConfig {
     };
 }
 declare function defaultConfig(): GrphClientConfig;
+/** Native GRPH governance. Monetary amounts are decimal strings in base units. */
+interface GovernanceConfig {
+    proposalDeposit: string;
+    depositDestination: 'BURN' | 'TREASURY' | 'SPLIT';
+    treasuryShareBps: number;
+    treasury: string;
+    votingPeriod: number;
+    timelock: number;
+    holdingPeriod: number;
+    quorumBps: number;
+    approvalBps: number;
+    maxActiveProposals: number;
+    walletVoteCap: string;
+    baseFee: string;
+    minFee: string;
+    maxFee: string;
+    feeDestination: 'BURN' | 'TREASURY' | 'SPLIT';
+}
+interface MintPolicy {
+    maxSupply: string;
+    periodCap: string;
+    periodSeconds: number;
+    minters: string[];
+    threshold: number;
+    revision?: number;
+    currentPeriod?: number;
+    mintedInPeriod?: string;
+}
+type GovernanceChange = {
+    parameter: 'mintPolicy';
+    token: string;
+    mintPolicy: MintPolicy;
+} | {
+    parameter: keyof GovernanceConfig | 'tokenCreationFee';
+    value: string;
+};
+type GovernanceProposalCommand = GovernanceChange & {
+    title: string;
+    description: string;
+};
+interface GovernanceVote {
+    locked: string;
+    power: string;
+    support: boolean;
+    released: boolean;
+}
+interface GovernanceProposal {
+    id: string;
+    proposer: string;
+    title: string;
+    description: string;
+    change: GovernanceProposalCommand;
+    rules: GovernanceConfig;
+    status: 'DRAFT' | 'VOTING' | 'PASSED' | 'REJECTED' | 'EXECUTED';
+    snapshotHeight: number;
+    snapshotRoot: string;
+    votingEnds: number;
+    executeAfter: number;
+    eligiblePower: string;
+    eligibleBalances: Record<string, string>;
+    votes: Record<string, GovernanceVote>;
+    deposit: string;
+    depositSettled: boolean;
+    executionError?: string;
+}
+interface GovernanceMintRequest {
+    id: string;
+    token: string;
+    recipient: string;
+    amount: string;
+    policyRevision: number;
+    expiresAt: number;
+    executed: boolean;
+    approvals: string[];
+}
+interface GovernanceEvent {
+    type: string;
+    reference: string;
+    actor: string;
+    amount: string;
+    height: string;
+    timestamp: string;
+}
 
 declare class GrphRestClient {
     private baseUrl;
     constructor(baseUrl: string);
     private get;
+    getGovernanceConfig(chainId: string): Promise<GovernanceConfig>;
+    getActiveProposals(chainId: string): Promise<{
+        active: string[];
+    }>;
+    getGovernanceProposal(chainId: string, id: string): Promise<GovernanceProposal>;
+    getMintRequest(chainId: string, id: string): Promise<GovernanceMintRequest>;
+    getGovernanceEvent(chainId: string, reference: string, type: string, actor: string): Promise<GovernanceEvent>;
+    getControlledToken(chainId: string, address: string): Promise<TokenInfo>;
     getAccount(address: string): Promise<AccountState | null>;
     getSyncStatus(): Promise<SyncStatus>;
     getStakePot(chainId: string): Promise<StakePot>;
@@ -291,7 +472,8 @@ declare class GrphRestClient {
     getValidatorReward(chainId: string, validatorAddress: string): Promise<DelegatorReward>;
     getDelegatorReward(chainId: string, validatorAddress: string, delegatorAddress: string): Promise<DelegatorReward>;
     getMyDelegations(chainId: string, delegatorAddress: string): Promise<Delegation[]>;
-    getTokens(): Promise<TokenInfo[]>;
+    getTokens(chainId: string, page?: number, size?: number): Promise<PaginatedResponse<TokenInfo>>;
+    getTokenHolders(chainId: string, token: string, page?: number, size?: number): Promise<PaginatedResponse<TokenHolder>>;
     getVaultBalances(address: string): Promise<VaultBalances>;
     getTenants(): Promise<Tenant[]>;
     getTenant(owner: string): Promise<Tenant | null>;
@@ -366,14 +548,38 @@ declare class GrphRpcClient {
     eth_getTokens(): Promise<object[]>;
 }
 
+declare class CursorPaginatedObservable<T> {
+    private observable;
+    private domain;
+    private send;
+    constructor(observable: Observable<T>, domain: SyncDomain, send: (data: unknown) => void);
+    subscribe(observerOrNext?: ((value: T) => void) | {
+        next?: (value: T) => void;
+        error?: (err: Error) => void;
+        complete?: () => void;
+    } | null, error?: ((err: Error) => void) | null, complete?: (() => void) | null): Subscription;
+    requestNextPage(cursor: string): void;
+    pipe(): Observable<T>;
+}
 declare class GrphWsClient {
     private baseUrl;
     private config;
     private connections;
+    private stateWatchConn;
     constructor(baseUrl: string, config: GrphClientConfig);
     txWatch(req: TxWatchRequest): Observable<TxWatchMessage>;
     blocks(): Observable<NewBlockMessage>;
     close(): void;
+    stateWatch(): {
+        account(addresses?: string[]): Observable<StateWatchDomainMessage> | CursorPaginatedObservable<StateWatchDomainMessage>;
+        stake(): Observable<StateWatchDomainMessage>;
+        token(): Observable<StateWatchDomainMessage>;
+        vault(): Observable<StateWatchDomainMessage>;
+        config(): Observable<StateWatchDomainMessage>;
+        tenant(): Observable<StateWatchDomainMessage>;
+        platform(): Observable<StateWatchDomainMessage>;
+        attest(): Observable<StateWatchDomainMessage>;
+    };
 }
 
 declare class GrphClient {
@@ -393,6 +599,7 @@ declare class GrphClientBuilder {
     ws(options: {
         txWatch?: boolean;
         blocks?: boolean;
+        stateWatch?: boolean;
     }): this;
     reconnect(options: {
         enabled?: boolean;
@@ -404,4 +611,38 @@ declare class GrphClientBuilder {
     static configure(): GrphClientBuilder;
 }
 
-export { type AccountState, type Assignment, type AttestSchema, type AttestVerifyResult, type Attestation, type ChainConfig, type Coin, type DecodedInput, type DecodedParameter, type Delegation, type DelegatorReward, type EntityChange, type EthereumBlock, type EthereumTransaction, type EthereumTransactionReceipt, GrphClient, GrphClientBuilder, type GrphClientConfig, GrphRestClient, GrphRpcClient, GrphWsClient, type JsonRpcRequest, type JsonRpcResponse, type NewBlockMessage, type Sentry, type SentryApplication, type StakePot, type SyncStatus, type Tenant, type TokenInfo, type TxWatchError, type TxWatchMessage, type TxWatchReady, type TxWatchRequest, type TxWatchTimeout, type Validator, type ValidatorPlatformInfo, type VaultBalances, defaultConfig };
+declare const GOVERNANCE_CONTRACT = "0x0000000000000000000000000000000000000004";
+declare const GOVERNANCE_ABI: readonly ["function governance(string operation, string payload)"];
+interface ControlledTokenCommand {
+    name: string;
+    symbol: string;
+    decimals: number;
+    initialSupply: string;
+    logoURI?: string;
+    mintPolicy: MintPolicy;
+}
+type GovernanceOperation = {
+    draft: GovernanceProposalCommand;
+    propose: GovernanceProposalCommand;
+    start: {
+        id: string;
+    };
+    vote: {
+        id: string;
+        amount: string;
+        support: boolean;
+    };
+    createToken: ControlledTokenCommand;
+    requestMint: {
+        token: string;
+        recipient: string;
+        amount: string;
+    };
+    approveMint: {
+        id: string;
+    };
+};
+/** Pass these arguments to governance() using an ABI encoder such as ethers Interface. Set tx.value to zero. */
+declare function governanceArguments<K extends keyof GovernanceOperation>(operation: K, command: GovernanceOperation[K]): [K, string];
+
+export { type AccountState, type Assignment, type AttestSchema, type AttestVerifyResult, type Attestation, type ChainConfig, type Coin, type ControlledTokenCommand, type DecodedInput, type DecodedParameter, type Delegation, type DelegatorReward, type EntityChange, type EthereumBlock, type EthereumTransaction, type EthereumTransactionReceipt, GOVERNANCE_ABI, GOVERNANCE_CONTRACT, type GovernanceChange, type GovernanceConfig, type GovernanceEvent, type GovernanceMintRequest, type GovernanceOperation, type GovernanceProposal, type GovernanceProposalCommand, type GovernanceVote, GrphClient, GrphClientBuilder, type GrphClientConfig, GrphRestClient, GrphRpcClient, GrphWsClient, type JsonRpcRequest, type JsonRpcResponse, type MintPolicy, type NewBlockMessage, type PaginatedResponse, type Sentry, type SentryApplication, type StakePot, type StateWatchChangeEntry, type StateWatchClientMessage, type StateWatchDomainMessage, type StateWatchEntity, type StateWatchError, type StateWatchNextPage, type StateWatchServerMessage, type StateWatchSnapshot, type StateWatchSnapshotComplete, type StateWatchSnapshotPage, type StateWatchStateChange, type StateWatchSubscribe, type StateWatchUnsubscribe, type SyncDomain, type SyncStatus, type Tenant, type TokenHolder, type TokenInfo, type TxWatchError, type TxWatchMessage, type TxWatchReady, type TxWatchRequest, type TxWatchTimeout, type Validator, type ValidatorPlatformInfo, type VaultBalances, defaultConfig, governanceArguments };

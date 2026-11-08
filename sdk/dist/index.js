@@ -21,6 +21,24 @@ var GrphRestClient = class {
     if (!text) return null;
     return JSON.parse(text);
   }
+  async getGovernanceConfig(chainId) {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/config`);
+  }
+  async getActiveProposals(chainId) {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/active`);
+  }
+  async getGovernanceProposal(chainId, id) {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/proposals/${encodeURIComponent(id)}`);
+  }
+  async getMintRequest(chainId, id) {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/mints/${encodeURIComponent(id)}`);
+  }
+  async getGovernanceEvent(chainId, reference, type, actor) {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/events/${encodeURIComponent(reference)}/${encodeURIComponent(type)}/${encodeURIComponent(actor)}`);
+  }
+  async getControlledToken(chainId, address) {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/tokens/${encodeURIComponent(address)}`);
+  }
   async getAccount(address) {
     return this.get("/graphene/state/account", { address });
   }
@@ -53,8 +71,16 @@ var GrphRestClient = class {
   async getMyDelegations(chainId, delegatorAddress) {
     return this.get("/graphene/state/stake/my-delegations", { chainId, delegatorAddress });
   }
-  async getTokens() {
-    return this.get("/graphene/state/tokens");
+  async getTokens(chainId, page = 0, size = 20) {
+    return this.get("/graphene/state/tokens", { chainId, page: String(page), size: String(size) });
+  }
+  async getTokenHolders(chainId, token, page = 0, size = 20) {
+    return this.get("/graphene/state/tokens/holders", {
+      chainId,
+      token,
+      page: String(page),
+      size: String(size)
+    });
   }
   async getVaultBalances(address) {
     return this.get("/graphene/state/vault-balances", { address });
@@ -230,22 +256,46 @@ var GrphRpcClient = class {
 };
 
 // src/GrphWsClient.ts
-import { Observable } from "rxjs";
+import { Observable, Subject } from "rxjs";
+import { filter, share } from "rxjs/operators";
+var CursorPaginatedObservable = class {
+  constructor(observable, domain, send) {
+    this.observable = observable;
+    this.domain = domain;
+    this.send = send;
+  }
+  observable;
+  domain;
+  send;
+  subscribe(observerOrNext, error, complete) {
+    return this.observable.subscribe(observerOrNext, error, complete);
+  }
+  requestNextPage(cursor) {
+    this.send({ type: "nextPage", domain: this.domain, cursor });
+  }
+  pipe() {
+    return this.observable.pipe();
+  }
+};
 var WsConnection = class {
-  constructor(url, onMessage, onStatus, reconnectConfig) {
+  constructor(url, onMessage, onStatus, reconnectConfig, onReconnected) {
     this.url = url;
     this.onMessage = onMessage;
     this.onStatus = onStatus;
     this.reconnectConfig = reconnectConfig;
+    this.onReconnected = onReconnected;
   }
   url;
   onMessage;
   onStatus;
   reconnectConfig;
+  onReconnected;
   ws = null;
   reconnectAttempts = 0;
   reconnectTimer = null;
   destroyed = false;
+  previouslyConnected = false;
+  pendingMessages = [];
   connect() {
     if (this.destroyed) return;
     try {
@@ -253,6 +303,11 @@ var WsConnection = class {
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
         this.onStatus("connected");
+        this.flushPending();
+        if (this.previouslyConnected && this.onReconnected) {
+          this.onReconnected();
+        }
+        this.previouslyConnected = true;
       };
       this.ws.onmessage = (event) => {
         try {
@@ -276,6 +331,14 @@ var WsConnection = class {
   send(data) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
+    } else {
+      this.pendingMessages.push(data);
+    }
+  }
+  flushPending() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    while (this.pendingMessages.length > 0) {
+      this.ws.send(JSON.stringify(this.pendingMessages.shift()));
     }
   }
   scheduleReconnect() {
@@ -294,6 +357,7 @@ var WsConnection = class {
   }
   close() {
     this.destroyed = true;
+    this.pendingMessages = [];
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.ws) {
       this.ws.onclose = null;
@@ -315,6 +379,7 @@ var GrphWsClient = class {
   baseUrl;
   config;
   connections = [];
+  stateWatchConn = null;
   txWatch(req) {
     const path = "/graphene/tx-watch";
     const url = wsUrl(this.baseUrl, path);
@@ -368,6 +433,139 @@ var GrphWsClient = class {
       conn.close();
     }
     this.connections = [];
+    if (this.stateWatchConn) {
+      this.stateWatchConn.destroy();
+      this.stateWatchConn = null;
+    }
+  }
+  stateWatch() {
+    if (!this.stateWatchConn) {
+      const path = "/graphene/ws/state-watch";
+      const url = wsUrl(this.baseUrl, path);
+      this.stateWatchConn = new StateWatchConnection(url, this.config.reconnect);
+      this.connections.push(this.stateWatchConn.connection);
+    }
+    return {
+      account: (addresses) => this.stateWatchConn.observe("account", addresses ? { addresses } : void 0),
+      stake: () => this.stateWatchConn.observe("stake"),
+      token: () => this.stateWatchConn.observe("token"),
+      vault: () => this.stateWatchConn.observe("vault"),
+      config: () => this.stateWatchConn.observe("config"),
+      tenant: () => this.stateWatchConn.observe("tenant"),
+      platform: () => this.stateWatchConn.observe("platform"),
+      attest: () => this.stateWatchConn.observe("attest")
+    };
+  }
+};
+var StateWatchConnection = class {
+  subject = new Subject();
+  subscriptions = /* @__PURE__ */ new Map();
+  refCount = 0;
+  connection;
+  constructor(url, reconnectConfig) {
+    this.connection = new WsConnection(
+      url,
+      (data) => this.subject.next(data),
+      () => {
+      },
+      reconnectConfig,
+      () => this.resubscribeAll()
+    );
+  }
+  observe(domain, scope, lastBlock) {
+    const observable = new Observable((subscriber) => {
+      if (this.refCount === 0) {
+        this.connection.connect();
+      }
+      this.refCount++;
+      this.subscribe(domain, scope, lastBlock);
+      const sub = this.subject.pipe(
+        filter((msg) => {
+          if (msg.type === "error") {
+            subscriber.error(new Error(msg.message));
+            return false;
+          }
+          if ("domain" in msg && msg.domain === domain) return true;
+          return false;
+        }),
+        share()
+      ).subscribe({
+        next: (msg) => {
+          const key = this.subscriptionKey(domain, scope);
+          const existing = this.subscriptions.get(key);
+          if (existing && msg.blockNumber > (existing.lastBlock ?? -1)) {
+            existing.lastBlock = msg.blockNumber;
+          }
+          if (msg.type === "snapshot") {
+            subscriber.next({ domain: msg.domain, blockNumber: msg.blockNumber, entities: msg.entities });
+          } else if (msg.type === "snapshotPage") {
+            subscriber.next({
+              domain: msg.domain,
+              blockNumber: msg.blockNumber,
+              entities: msg.entities,
+              nextCursor: msg.nextCursor,
+              hasMore: msg.hasMore
+            });
+          } else if (msg.type === "snapshotComplete") {
+            subscriber.next({ domain: msg.domain, blockNumber: msg.blockNumber });
+          } else if (msg.type === "stateChange") {
+            subscriber.next({ domain: msg.domain, blockNumber: msg.blockNumber, changes: msg.changes });
+          }
+        },
+        error: (err) => subscriber.error(err)
+      });
+      return () => {
+        sub.unsubscribe();
+        this.unsubscribe(domain, scope);
+        this.refCount--;
+        if (this.refCount <= 0) {
+          this.refCount = 0;
+          this.connection.close();
+        }
+      };
+    });
+    if (!scope && domain === "account") {
+      return new CursorPaginatedObservable(
+        observable,
+        domain,
+        (data) => this.connection.send(data)
+      );
+    }
+    return observable;
+  }
+  subscriptionKey(domain, scope) {
+    if (scope) {
+      return `${domain}:scoped:${JSON.stringify([...scope.addresses].sort())}`;
+    }
+    return domain;
+  }
+  subscribe(domain, scope, lastBlock) {
+    const key = this.subscriptionKey(domain, scope);
+    if (this.subscriptions.has(key)) return;
+    const msg = { type: "subscribe", domain };
+    if (scope) msg.scope = scope;
+    if (lastBlock !== void 0) msg.lastBlock = lastBlock;
+    this.subscriptions.set(key, { domain, scope, lastBlock });
+    this.connection.send(msg);
+  }
+  unsubscribe(domain, scope) {
+    const key = this.subscriptionKey(domain, scope);
+    if (!this.subscriptions.has(key)) return;
+    this.subscriptions.delete(key);
+    this.connection.send({ type: "unsubscribe", domain });
+  }
+  resubscribeAll() {
+    for (const [, sub] of this.subscriptions) {
+      const msg = { type: "subscribe", domain: sub.domain };
+      if (sub.scope) msg.scope = sub.scope;
+      if (sub.lastBlock !== void 0) msg.lastBlock = sub.lastBlock;
+      this.connection.send(msg);
+    }
+  }
+  destroy() {
+    this.subject.complete();
+    this.subscriptions.clear();
+    this.refCount = 0;
   }
 };
 
@@ -394,7 +592,8 @@ var DEFAULT_CONFIG = {
   rpc: true,
   ws: {
     txWatch: true,
-    blocks: true
+    blocks: true,
+    stateWatch: true
   },
   reconnect: {
     enabled: true,
@@ -424,6 +623,7 @@ var GrphClientBuilder = class _GrphClientBuilder {
   ws(options) {
     if (options.txWatch !== void 0) this.config.ws.txWatch = options.txWatch;
     if (options.blocks !== void 0) this.config.ws.blocks = options.blocks;
+    if (options.stateWatch !== void 0) this.config.ws.stateWatch = options.stateWatch;
     return this;
   }
   reconnect(options) {
@@ -440,12 +640,22 @@ var GrphClientBuilder = class _GrphClientBuilder {
     return new _GrphClientBuilder();
   }
 };
+
+// src/governance.ts
+var GOVERNANCE_CONTRACT = "0x0000000000000000000000000000000000000004";
+var GOVERNANCE_ABI = ["function governance(string operation, string payload)"];
+function governanceArguments(operation, command) {
+  return [operation, JSON.stringify(command)];
+}
 export {
+  GOVERNANCE_ABI,
+  GOVERNANCE_CONTRACT,
   GrphClient,
   GrphClientBuilder,
   GrphRestClient,
   GrphRpcClient,
   GrphWsClient,
-  defaultConfig
+  defaultConfig,
+  governanceArguments
 };
 //# sourceMappingURL=index.js.map

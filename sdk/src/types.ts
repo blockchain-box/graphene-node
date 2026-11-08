@@ -51,6 +51,7 @@ export interface TokenHolder {
 }
 
 export interface TokenInfo {
+  mintPolicy?: MintPolicy;
   name?: string;
   creator?: string;
   creationNonce?: string;
@@ -76,6 +77,7 @@ export interface PaginatedResponse<T> {
 }
 
 export interface ChainConfig {
+  governance?: GovernanceConfig;
   tokenCreationFee: string | null;
   chainId: string;
   minStake: string;
@@ -409,4 +411,80 @@ const DEFAULT_CONFIG: GrphClientConfig = {
 
 export function defaultConfig(): GrphClientConfig {
   return { ...DEFAULT_CONFIG };
+}
+
+/** Native GRPH governance. Monetary amounts are decimal strings in base units. */
+export interface GovernanceConfig {
+  proposalDeposit: string;
+  depositDestination: 'BURN' | 'TREASURY' | 'SPLIT';
+  treasuryShareBps: number;
+  treasury: string;
+  votingPeriod: number;
+  timelock: number;
+  holdingPeriod: number;
+  quorumBps: number;
+  approvalBps: number;
+  maxActiveProposals: number;
+  walletVoteCap: string;
+  baseFee: string;
+  minFee: string;
+  maxFee: string;
+  feeDestination: 'BURN' | 'TREASURY' | 'SPLIT';
+}
+export interface MintPolicy {
+  maxSupply: string;
+  periodCap: string;
+  periodSeconds: number;
+  minters: string[];
+  threshold: number;
+  revision?: number;
+  currentPeriod?: number;
+  mintedInPeriod?: string;
+}
+export type GovernanceChange =
+  | { parameter: 'mintPolicy'; token: string; mintPolicy: MintPolicy }
+  | { parameter: keyof GovernanceConfig | 'tokenCreationFee'; value: string };
+export type GovernanceProposalCommand = GovernanceChange & { title: string; description: string };
+export interface GovernanceVote {
+  locked: string;
+  power: string;
+  support: boolean;
+  released: boolean;
+}
+export interface GovernanceProposal {
+  id: string;
+  proposer: string;
+  title: string;
+  description: string;
+  change: GovernanceProposalCommand;
+  rules: GovernanceConfig;
+  status: 'DRAFT' | 'VOTING' | 'PASSED' | 'REJECTED' | 'EXECUTED';
+  snapshotHeight: number;
+  snapshotRoot: string;
+  votingEnds: number;
+  executeAfter: number;
+  eligiblePower: string;
+  eligibleBalances: Record<string, string>;
+  votes: Record<string, GovernanceVote>;
+  deposit: string;
+  depositSettled: boolean;
+  executionError?: string;
+}
+export interface GovernanceMintRequest {
+  id: string;
+  token: string;
+  recipient: string;
+  amount: string;
+  policyRevision: number;
+  expiresAt: number;
+  executed: boolean;
+  approvals: string[];
+}
+export interface GovernanceEvent {
+  type: string;
+  reference: string;
+  actor: string;
+  amount: string;
+  height: string;
+  timestamp: string;
 }

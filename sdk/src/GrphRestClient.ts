@@ -1,4 +1,8 @@
 import type {
+  GovernanceConfig,
+  GovernanceProposal,
+  GovernanceMintRequest,
+  GovernanceEvent,
   AccountState,
   Attestation,
   AttestSchema,
@@ -40,6 +44,30 @@ export class GrphRestClient {
     const text = await response.text();
     if (!text) return null as T;
     return JSON.parse(text) as T;
+  }
+
+  async getGovernanceConfig(chainId: string): Promise<GovernanceConfig> {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/config`);
+  }
+
+  async getActiveProposals(chainId: string): Promise<{ active: string[] }> {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/active`);
+  }
+
+  async getGovernanceProposal(chainId: string, id: string): Promise<GovernanceProposal> {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/proposals/${encodeURIComponent(id)}`);
+  }
+
+  async getMintRequest(chainId: string, id: string): Promise<GovernanceMintRequest> {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/mints/${encodeURIComponent(id)}`);
+  }
+
+  async getGovernanceEvent(chainId: string, reference: string, type: string, actor: string): Promise<GovernanceEvent> {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/events/${encodeURIComponent(reference)}/${encodeURIComponent(type)}/${encodeURIComponent(actor)}`);
+  }
+
+  async getControlledToken(chainId: string, address: string): Promise<TokenInfo> {
+    return this.get(`/graphene/state/governance/${encodeURIComponent(chainId)}/tokens/${encodeURIComponent(address)}`);
   }
 
   async getAccount(address: string): Promise<AccountState | null> {

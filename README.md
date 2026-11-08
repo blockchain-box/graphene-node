@@ -1751,3 +1751,7 @@ For a different private identity directory use `GRAPHENE_SECRETS_DIR`; for anoth
 launcher port use `SETUP_PORT`. Remote DHT rendezvous and checkpoint publication
 locations can be configured with `GRAPHENE_DHT_BOOTSTRAP` and
 `GRAPHENE_CHECKPOINT_PUBLICATION_DIR` respectively.
+
+## Governance upgrade
+
+Validator and sentry Compose services forward `GOVERNANCE_ACTIVATION_HEIGHT` (default `0`, disabled). Set the same future positive height on every validator and retain it for replay. The upgrade seeds account holding histories, so voting requires a holding-period warmup. See [governance activation and API documentation](../graphene-quarkus/docs/GOVERNANCE.md) for defaults and usage.
