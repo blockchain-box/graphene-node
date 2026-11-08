@@ -5,7 +5,29 @@ import os from 'node:os';
 import path from 'node:path';
 import { generateAll } from '../agents/validator-agent/src/keygen.js';
 import { publicNodeSetup } from '../agents/lib/node-setup.js';
-import { installIdentity, verifyRegistration, composeDefinition, LocalNodeRuntime, bootstrapNetwork } from './local-node-runtime.js';
+import { installIdentity, verifyRegistration, composeDefinition, configureMptAuth, LocalNodeRuntime, bootstrapNetwork } from './local-node-runtime.js';
+
+test('validator and sentry profiles share a retained MPT token across regeneration and migration', () => {
+  for (const role of ['validator', 'sentry']) {
+    const profile = composeDefinition('/private/node', 'id@bootstrap:26656', 'local', { role });
+    const token = profile.services.mpt.environment.MPT_DB_API_TOKEN;
+    assert.match(token, /^[a-f0-9]{64}$/);
+    assert.equal(profile.services.abci.environment.MPT_DB_API_TOKEN, token);
+    configureMptAuth(profile);
+    assert.equal(profile.services.mpt.environment.MPT_DB_API_TOKEN, token);
+    delete profile.services.abci.environment.MPT_DB_API_TOKEN;
+    configureMptAuth(profile);
+    assert.equal(profile.services.abci.environment.MPT_DB_API_TOKEN, token);
+    delete profile.services.abci.environment.MPT_DB_API_TOKEN;
+    delete profile.services.mpt.environment.MPT_DB_API_TOKEN;
+    configureMptAuth(profile);
+    const migrated = profile.services.mpt.environment.MPT_DB_API_TOKEN;
+    assert.match(migrated, /^[a-f0-9]{64}$/);
+    assert.equal(profile.services.abci.environment.MPT_DB_API_TOKEN, migrated);
+    configureMptAuth(profile);
+    assert.equal(profile.services.mpt.environment.MPT_DB_API_TOKEN, migrated);
+  }
+});
 
 test('identity installation never replaces a consensus key, genesis, or signing state on restart', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'grph-runtime-'));

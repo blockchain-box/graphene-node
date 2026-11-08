@@ -13,7 +13,8 @@ import { generateAll } from '../agents/validator-agent/src/keygen.js';
 import { publicNodeSetup } from '../agents/lib/node-setup.js';
 import { docker, inspect, json, exportBootstrap } from './checkpoint-docker.js';
 import { verifyRestore } from './checkpoint-verify.js';
-import { verifyManifest } from './checkpoint-core.js';
+import { verifyManifest, fetchCheckpoint } from './checkpoint-core.js';
+import { checkpointDownloadPath, serveCheckpointDownload } from './checkpoint-serving.js';
 
 // Uses only synthetic keys, its own chain/network, and newly allocated volumes.
 // The real graphene-local bootstrap is never stopped or changed by this test.
@@ -63,7 +64,7 @@ test('export, Grph P2P download, launcher restore and canonical catch-up on real
     }
     const before = fs.readFileSync(path.join(home, 'config/priv_validator_key.json'));
     const output = path.join(folder, 'published');
-    const result = await exportBootstrap({ output, privateKey: keys.privateKey, source, verifyRestore: (directory, trust) => verifyRestore(directory, trust, { reference: source }) });
+    let result = await exportBootstrap({ output, privateKey: keys.privateKey, source, verifyRestore: (directory, trust) => verifyRestore(directory, trust, { reference: source }) });
     const envelope = JSON.parse(fs.readFileSync(path.join(output, 'latest.json')));
     assert.equal(verifyManifest(envelope, result.trust).height, result.manifest.height);
     assert.ok(result.manifest.verification.height > Number(result.manifest.height));
@@ -72,17 +73,22 @@ test('export, Grph P2P download, launcher restore and canonical catch-up on real
     assert.equal((await inspect(source.tm)).State.Running, true);
     assert.equal(JSON.parse(fs.readFileSync(path.join(result.directory, 'app-state.json'))).session_token, null);
     server = http.createServer((req, res) => {
-      const name = req.url.replace(/^\//, '');
-      if (name.includes('..') || !fs.existsSync(path.join(output, name)) || !fs.statSync(path.join(output, name)).isFile()) { res.writeHead(404).end(); return; }
-      res.setHeader('Content-Length', fs.statSync(path.join(output, name)).size);
-      fs.createReadStream(path.join(output, name)).pipe(res);
+      const match = checkpointDownloadPath.exec(req.url);
+      if (!match) { res.writeHead(404).end(); return; }
+      void serveCheckpointDownload(req, res, output, match[1]);
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const trustFile = path.join(folder, 'receiver-trust.json');
     publication = await openGrphServer({ seed: crypto.randomBytes(32).toString('hex'), port: server.address().port });
-    fs.writeFileSync(trustFile, JSON.stringify({ ...result.trust, manifestURL: `grph://${publication.key}/latest.json` }));
+    fs.writeFileSync(trustFile, JSON.stringify({ ...result.trust, manifestURL: `grph://${publication.key}/checkpoints/latest.json` }));
+    const checkpointCacheDirectory = path.join(folder, 'receiver-cache');
+    await fetchCheckpoint(JSON.parse(fs.readFileSync(trustFile)), checkpointCacheDirectory);
+    const previous = result;
+    result = await exportBootstrap({ output, privateKey: keys.privateKey, source, verifyRestore: (directory, trust) => verifyRestore(directory, trust, { reference: source }) });
+    assert.equal(result.manifest.incremental.parent.id, previous.manifest.id);
+    assert.ok(result.stats.reusedChunks > 0, 'second checkpoint reuses entries from the first');
     const secrets = generateAll();
-    receiver = new LocalNodeRuntime({ directory: path.join(folder, 'receiver'), checkpointTrustFile: trustFile });
+    receiver = new LocalNodeRuntime({ directory: path.join(folder, 'receiver'), checkpointTrustFile: trustFile, checkpointCacheDirectory });
     receiver.unlock({ secrets, setup: publicNodeSetup('validator', secrets, 'Checkpoint test receiver') });
     const receiverHome = path.join(receiver.folder, 'tendermint');
     installIdentity(receiverHome, secrets, genesis);
@@ -114,6 +120,18 @@ test('export, Grph P2P download, launcher restore and canonical catch-up on real
     const marker = fs.readFileSync(path.join(receiver.folder, 'checkpoint-state.json'));
     await receiver.bootstrapCheckpoint(receiverHome);
     assert.deepEqual(fs.readFileSync(path.join(receiver.folder, 'checkpoint-state.json')), marker, 'Restart resumes existing data without restoring again');
+    // Capture from a follower without interrupting the voting bootstrap.
+    const bootstrapStartedAt = (await inspect(source.tm)).State.StartedAt;
+    await assert.rejects(exportBootstrap({ output, privateKey: keys.privateKey, source, requireNonVoting: true, verifyRestore }), /nonvoting source/);
+    assert.equal((await inspect(source.tm)).State.StartedAt, bootstrapStartedAt);
+    const followerAddress = (await receiver.compose(['port', 'node', '26657'])).trim();
+    const follower = { project: receiver.project, tm: `${receiver.project}-node-1`, abci: `${receiver.project}-abci-1`, mpt: `${receiver.project}-mpt-1`, db: `${receiver.project}-db-1`, rpc: `http://${followerAddress}`, agentAddress: receiver.identity.setup.agentAddress, role: 'validator' };
+    const heightBeforeCapture = (await json(`${source.rpc}/status`)).result.sync_info.latest_block_height;
+    result = await exportBootstrap({ output, privateKey: keys.privateKey, source: follower, requireNonVoting: true, verifyRestore: (directory, trust) => verifyRestore(directory, trust, { reference: follower }) });
+    assert.equal(result.manifest.source.agentAddress, follower.agentAddress);
+    assert.equal((await inspect(source.tm)).State.StartedAt, bootstrapStartedAt, 'voting bootstrap must never be stopped by follower capture');
+    assert.ok(BigInt((await json(`${source.rpc}/status`)).result.sync_info.latest_block_height) > BigInt(heightBeforeCapture));
+    console.log('Verified nonvoting source capture while the voting bootstrap keeps advancing.');
     // Exercise recovery against real existing stores on this synthetic nonvoter.
     await receiver.stop();
     const beforeReset = await json(`${source.rpc}/status`);

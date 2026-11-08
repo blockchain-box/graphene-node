@@ -8,11 +8,13 @@ import crypto from 'node:crypto';
 import { LauncherP2P, parseGrphLink, validGrphKey } from '../agents/lib/grph-tunnel.js';
 import { prepareNodeIdentity } from './node-identity.js';
 import { prepareWalletAction, nodeChainState, chainJson, walletNodes } from './node-wallet.js';
+import { LauncherCheckpoints } from './launcher-checkpoints.js';
 const idPattern = /^[a-z0-9-]{1,64}$/;
 const safeError = message => Object.assign(new Error(message), { status: 400 });
 
 export class NodeManager {
- constructor({ directory, keystorePath, sentrySecretsPath, runtimeFactory, readChain = chainJson, remoteFetch = fetch, p2p, doctorRunner=runHostDoctor }) {
+ constructor({ directory, keystorePath, sentrySecretsPath, runtimeFactory, readChain = chainJson, remoteFetch = fetch, p2p, doctorRunner=runHostDoctor, checkpoints = new LauncherCheckpoints() }) {
+  this.checkpoints = checkpoints;
   this.doctorRunner=doctorRunner;this.doctorPromise=null;
   this.directory = directory; this.legacyPaths = { directory, keystorePath, sentrySecretsPath };
   this.monitor = createHostMonitor(directory);
@@ -37,7 +39,7 @@ export class NodeManager {
  attach(node, identity) {
   const current = this.unlocked.get(node.id);
   if (this.operations.has(node.id)) throw safeError('Wait for this node’s current operation to finish.');
-  const runtime = current || this.runtimeFactory(identity.setup.role, { checkpointCacheDirectory: path.join(this.directory, 'checkpoint-cache', identity.setup.agentAddress.slice(2).toLowerCase()) });
+  const runtime = current || this.runtimeFactory(identity.setup.role, { checkpointCacheDirectory: path.join(this.directory, 'checkpoint-cache', identity.setup.agentAddress.slice(2).toLowerCase()), checkpointTrustFile: this.checkpoints.trustFile });
   runtime.unlock(identity); this.unlocked.set(node.id, runtime);
   Object.assign(node, { name: identity.setup.name, role: identity.setup.role, setup: identity.setup });
   delete node.archivedAt;
@@ -91,13 +93,18 @@ export class NodeManager {
    return { removed: true, retainedIdentity: true, nodeId: node.id };
   } finally { this.operations.delete(node.id); }
  }
- async act(node, action, wallet) {
+ async act(node, action, wallet, checkpointProviderId) {
   const runtime = this.unlocked.get(node.id);
   if (!runtime) throw safeError('Unlock this node with its original password first.');
   if (this.operations.has(node.id)) throw safeError('This node is already starting or stopping.');
   if (['start', 'reset'].includes(action) && !/^0x[0-9a-f]{40}$/i.test(wallet || '')) throw safeError('Connect the wallet that registered this node before starting.');
   this.operations.set(node.id, action === 'stop' ? 'stopping' : 'starting');
+  const startOptions = action === 'reset' ? { resetCheckpoint: true } : {};
   try {
+   if (['start', 'reset'].includes(action) && typeof runtime.requiresCheckpoint === 'function' && (action === 'reset' || runtime.requiresCheckpoint())) {
+    if (!checkpointProviderId) throw safeError('Choose a checkpoint source before first startup or recovery.');
+    startOptions.checkpointTrustFile = this.checkpoints.providerFile(checkpointProviderId);
+   }
    if (action === 'reset' && (await runtime.status()).state !== 'stopped') throw safeError('Stop this node before resetting from a checkpoint.');
    if (action === 'stop' && node.role === 'validator' && (await runtime.status()).state !== 'stopped') {
     if (!/^0x[0-9a-f]{40}$/i.test(wallet || '')) throw safeError('Connect the validator owner wallet to verify a safe stop.');
@@ -108,8 +115,45 @@ export class NodeManager {
    this.operations.delete(node.id);
    throw error;
   }
-  Promise.resolve().then(() => action === 'reset' ? runtime.start(wallet, { resetCheckpoint: true }) : action === 'start' ? runtime.start(wallet) : runtime.stop()).catch(() => {}).finally(() => this.operations.delete(node.id));
+  Promise.resolve().then(() => action === 'stop' ? runtime.stop() : Object.keys(startOptions).length ? runtime.start(wallet, startOptions) : runtime.start(wallet)).catch(() => {}).finally(() => this.operations.delete(node.id));
   return { accepted: true, nodeId: node.id };
+ }
+ async checkpointSources(wallet) {
+  const inventory = await walletNodes(wallet, this.readChain);
+  return { nodes: await Promise.all(inventory.nodes.map(async registered => {
+   const node = this.nodes.find(n => !n.archivedAt && n.role === registered.role && n.setup?.agentAddress?.toLowerCase() === registered.setup.agentAddress.toLowerCase());
+   const runtime = node && this.unlocked.get(node.id);
+   let status = { state: 'locked' };
+   try { if (runtime) status = await runtime.status(); } catch { status = { state: 'unavailable' }; }
+   let activeValidatorCount = 0, assignmentsVerified = true;
+   if (runtime && registered.role === 'sentry') {
+    try {
+     const assignments = await this.readChain('/graphene/state/platform/assignments?sentryId=' + registered.setup.agentAddress.toLowerCase());
+     assignmentsVerified = Array.isArray(assignments);
+     if (assignmentsVerified) activeValidatorCount = assignments.filter(assignment => String(assignment.status).toLowerCase() === 'active' && (!assignment.sentryId || assignment.sentryId.toLowerCase() === registered.setup.agentAddress.toLowerCase())).length;
+    } catch { assignmentsVerified = false; }
+   }
+   const interruptionRequired = activeValidatorCount > 0;
+   const canCreate = !!node && !!runtime && registered.active && assignmentsVerified && status.state === 'running' && String(status.votingPower) === '0' && !this.operations.has(node.id);
+   const reason = !node ? 'Connect the original node host and reopen its saved identity.' : !runtime ? 'Unlock this node on its host.' : !registered.active ? 'This registration is inactive.' : !assignmentsVerified ? 'Sentry assignments could not be verified. Refresh and try again.' : String(status.votingPower) !== '0' ? 'Voting power is nonzero or unknown; this node cannot be paused.' : status.state !== 'running' ? 'Start this node and wait until it is synchronized.' : this.operations.has(node.id) ? 'Wait for its current operation.' : '';
+   return { nodeId: node?.id || null, agentAddress: registered.setup.agentAddress, role: registered.role, name: node?.name || registered.name, state: status.state, votingPower: status.votingPower, canCreate, reason, interruptionRequired, activeValidatorCount, checkpoint: this.checkpoints.nodePublication(registered.setup.agentAddress) };
+  })) };
+ }
+ async createNodeCheckpoint(body) {
+  if (!/^0x[a-f0-9]{40}$/i.test(body.wallet || '')) throw safeError('Connect the wallet that owns the checkpoint source.');
+  const node = this.find(body.sourceNodeId);
+  const runtime = this.unlocked.get(node.id);
+  if (!runtime || typeof runtime.checkpointSource !== 'function') throw safeError('Unlock the source node on its original host.');
+  this.operations.set(node.id, 'checkpointing');
+  try {
+   const inventory = await walletNodes(body.wallet, this.readChain);
+   if (!inventory.nodes.some(n => n.active && n.role === node.role && n.setup.agentAddress.toLowerCase() === node.setup.agentAddress.toLowerCase())) throw safeError('The connected wallet does not own this active checkpoint source.');
+   const source = await runtime.checkpointSource({ confirmServing: body.confirmServing === true });
+   if (source.agentAddress.toLowerCase() !== node.setup.agentAddress.toLowerCase()) throw safeError('The source identity changed.');
+   const accepted = this.checkpoints.startCreation(body, { source });
+   void this.checkpoints.task.finally(() => this.operations.delete(node.id));
+   return accepted;
+  } catch (error) { this.operations.delete(node.id); throw error; }
  }
  hosts() { return { hosts: [{ id: 'local', label: 'This computer / server', connected: true }, ...this.remotes.map(({ origin, ...r }) => ({ ...r, transport:'grph', connected: this.remoteTokens.has(r.id) }))] }; }
  async connect(body, ownOrigin) {
@@ -139,7 +183,8 @@ export class NodeManager {
   if (!host || !token || !connection) throw safeError('Reconnect this server using its Grph P2P connection link.');
   const nodeRoute = /^\/(nodes(?:\/[a-z0-9-]{1,64}(?:\/(?:unlock|start|reset|stop|lock|remove|setup|transaction|chain\/(?:0x[0-9a-fA-F]{40})))?)?|rpc)$/;
   const walletRoute = /^\/wallets\/0x[0-9a-fA-F]{40}\/nodes(?:\/(?:validator|sentry)\/0x[0-9a-fA-F]{40}\/(?:chain|transaction))?$/;
-  if (!['GET', 'POST'].includes(body.method) || typeof body.route !== 'string' || !(nodeRoute.test(body.route) || walletRoute.test(body.route) || body.route==='/doctor'&&body.method==='POST' || ['/capabilities','/monitor'].includes(body.route)&&body.method==='GET')) throw safeError('This remote action is not supported.');
+  const checkpointRoute = (body.route === '/checkpoints' || /^\/checkpoints\/sources\/0x[a-f0-9]{40}$/i.test(body.route) || /^\/nodes\/[a-z0-9-]{1,64}\/checkpoint-options\/0x[a-f0-9]{40}$/i.test(body.route)) && body.method === 'GET' || ['/checkpoints/enroll', '/checkpoints/enroll-provider', '/checkpoints/create'].includes(body.route) && body.method === 'POST';
+  if (!['GET', 'POST'].includes(body.method) || typeof body.route !== 'string' || !(nodeRoute.test(body.route) || walletRoute.test(body.route) || checkpointRoute || body.route==='/doctor'&&body.method==='POST' || ['/capabilities','/monitor'].includes(body.route)&&body.method==='GET')) throw safeError('This remote action is not supported.');
   const response = await this.remoteFetch(connection.origin + '/manager' + body.route, { method: body.method, headers: { Origin: connection.origin, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, ...(body.method === 'POST' ? { body: JSON.stringify(body.body || {}) } : {}), signal: AbortSignal.timeout(20000), redirect: 'error' }).catch(() => { throw safeError('Remote peer is unavailable. Check its launcher and the P2P tunnel. Its nodes may still be running.'); });
   const value = await response.json();
   if (!response.ok) throw safeError(value.error || 'The remote server could not complete this action.');
@@ -171,8 +216,24 @@ export class NodeManager {
    return {...prepareWalletAction(node.setup, body.wallet, body.action, body.input),...(connection?{connection}:{})};
  }
  async dispatch(route, method, body, { ownOrigin, localPort, token } = {}) {
+  const sourceWallet = /^\/checkpoints\/sources\/(0x[a-f0-9]{40})$/i.exec(route);
+  if (sourceWallet && method === 'GET') return this.checkpointSources(sourceWallet[1]);
+  const restoreOptions = /^\/nodes\/([a-z0-9-]{1,64})\/checkpoint-options\/(0x[a-f0-9]{40})$/i.exec(route);
+  if (restoreOptions && method === 'GET') {
+   const node = this.find(restoreOptions[1]), runtime = this.unlocked.get(node.id);
+   if (!runtime) throw safeError('Unlock the target node first.');
+   const state = await nodeChainState(node.setup, restoreOptions[2], this.readChain);
+   if (!state.ownerMatches) throw safeError('Connect this node’s owner wallet.');
+   return { requiresCheckpoint: runtime.requiresCheckpoint?.() ?? true, genesisHash: await runtime.checkpointNetwork?.(), providers: this.checkpoints.providerChoices() };
+  }
+  if (route === '/checkpoints' && method === 'GET') return this.checkpoints.status();
+  if (['/checkpoints/enroll', '/checkpoints/enroll-provider', '/checkpoints/create'].includes(route) && method === 'POST') {
+   if (this.operations.size) throw safeError('Wait for this host’s node operations to finish before changing checkpoints.');
+   return route.endsWith('/create') ? this.createNodeCheckpoint(body) : route.endsWith('/enroll-provider') ? this.checkpoints.startProviderEnrollment(body) : this.checkpoints.startEnrollment(body);
+  }
+  if (method === 'POST' && /^\/nodes(?:\/|$)/.test(route) && this.checkpoints.busy) throw safeError('Wait for this host’s checkpoint operation to finish before changing node controls.');
   if (route === '/share' && method === 'POST') { const published = await this.p2p.publish(localPort); return { link: 'grph://' + published.key + '#' + token, transport: 'grph' }; }
-  if(route==='/capabilities'&&method==='GET')return {features:['agent-funding-v1','host-doctor-v1','drawer-tabs-v1','host-monitor-v1','saved-node-removal-v1','checkpoint-reset-v1']};
+  if(route==='/capabilities'&&method==='GET')return {features:['agent-funding-v1','host-doctor-v1','drawer-tabs-v1','host-monitor-v1','saved-node-removal-v1','checkpoint-reset-v1','launcher-checkpoints-v1','checkpoint-node-selection-v1']};
   if(route==='/monitor'&&method==='GET')return this.monitor();
   if(route==='/doctor'&&method==='POST'){if(Object.keys(body||{}).length)throw safeError('Doctor accepts no command arguments.');if(!this.doctorPromise)this.doctorPromise=Promise.resolve().then(()=>this.doctorRunner()).finally(()=>{this.doctorPromise=null;});return this.doctorPromise;}
   if (route === '/hosts' && method === 'GET') return this.hosts();
@@ -210,7 +271,7 @@ export class NodeManager {
   if (action === 'unlock') return this.unlock(node, body.passphrase);
   if (action === 'lock') { if (this.operations.has(node.id)) throw safeError('Wait for this node’s current operation to finish.'); const runtime = this.unlocked.get(node.id); if (runtime) { runtime.identity = null; } this.unlocked.delete(node.id); return { locked: true }; }
   if (action === 'reset' && body.confirmReset !== true) throw safeError('Confirm checkpoint reset for the selected stopped node.');
-  if (action === 'start' || action === 'stop' || action === 'reset') return this.act(node, action, body.wallet);
+  if (action === 'start' || action === 'stop' || action === 'reset') return this.act(node, action, body.wallet, body.checkpointProviderId);
   if (action === 'transaction') {
    return this.prepareTransaction(node, body);
   }

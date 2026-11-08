@@ -8,11 +8,13 @@ import { spawn } from 'node:child_process';
 import { renderNodeGuide } from './node-guide.js';
 import { NodeManager } from './node-manager.js';
 import { LocalNodeRuntime } from './local-node-runtime.js';
+import { checkpointDownloadPath, serveCheckpointDownload } from './checkpoint-serving.js';
+import { LauncherCheckpoints } from './launcher-checkpoints.js';
 
 export function createSetupServer({ directory, token = crypto.randomBytes(32).toString('hex'),
   keystorePath = path.join(directory, 'keystore.enc'), sentrySecretsPath = path.join(directory, 'sentry-secrets.json'),
-  runtime, managerReadChain, p2p, checkpointDirectory = process.env.GRAPHENE_CHECKPOINT_PUBLICATION_DIR || fileURLToPath(new URL('../.checkpoints/publication', import.meta.url)), runtimeFactory = (role, options = {}) => new LocalNodeRuntime({ directory, ...options }) }) {
-  const manager = new NodeManager({ directory, keystorePath, sentrySecretsPath, readChain: managerReadChain, p2p, runtimeFactory: (role, options) => runtime || runtimeFactory(role, options) });
+  runtime, managerReadChain, p2p, checkpoints, checkpointDirectory = process.env.GRAPHENE_CHECKPOINT_PUBLICATION_DIR || fileURLToPath(new URL('../.checkpoints/publication', import.meta.url)), runtimeFactory = (role, options = {}) => new LocalNodeRuntime({ directory, ...options }) }) {
+  const manager = new NodeManager({ directory, keystorePath, sentrySecretsPath, readChain: managerReadChain, p2p, checkpoints: checkpoints || new LauncherCheckpoints({ output: checkpointDirectory }), runtimeFactory: (role, options) => runtime || runtimeFactory(role, options) });
   const server = http.createServer(async (req, res) => {
     // Grph P2P clients use ephemeral loopback ports. Trust only literal loopback
     // hostnames; authenticated mutation origins must still match this exact Host.
@@ -26,21 +28,17 @@ export function createSetupServer({ directory, token = crypto.randomBytes(32).to
       res.end(JSON.stringify(value));
     };
     if (!loopback || Number(loopback[2]) < 1 || Number(loopback[2]) > 65535) return reply(403, { error: 'Open the local setup address shown in your launcher.' });
-    const checkpointFile = /^\/checkpoints\/(latest\.json|[a-zA-Z0-9-]{1,100}\/(?:manifest\.json|genesis\.json|app-state\.json|mpt\.tar\.gz|tendermint\.tar\.gz))$/.exec(req.url);
+    if (req.url === '/checkpoints/enrollment.json' && req.method === 'GET') {
+      try { return reply(200, manager.checkpoints.publicEnrollment()); }
+      catch { return reply(404, { error: 'No public checkpoint publisher configuration is available.' }); }
+    }
+    const checkpointFile = checkpointDownloadPath.exec(req.url);
     if (checkpointFile && req.method === 'GET') {
-      try {
-        const directory = fs.realpathSync(checkpointDirectory), file = fs.realpathSync(path.join(directory, checkpointFile[1]));
-        if (!file.startsWith(directory + path.sep) || !fs.statSync(file).isFile()) return reply(404, { error: 'Checkpoint not found.' });
-        const bytes = fs.statSync(file).size, range = /^bytes=([0-9]+)-$/.exec(req.headers.range || '');
-        if (req.headers.range && (!range || Number(range[1]) >= bytes)) { res.writeHead(416); return res.end(); }
-        const start = range ? Number(range[1]) : 0;
-        res.writeHead(range ? 206 : 200, { 'Content-Type': file.endsWith('.json') ? 'application/json' : 'application/octet-stream', 'Content-Length': bytes - start, 'Accept-Ranges': 'bytes', ...(range ? { 'Content-Range': `bytes ${start}-${bytes-1}/${bytes}` } : {}) });
-        const stream = fs.createReadStream(file, { start });stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());return stream.pipe(res);
-      } catch { return reply(404, { error: 'Checkpoint not found.' }); }
+      return serveCheckpointDownload(req, res, checkpointDirectory, checkpointFile[1]);
     }
     if (req.url === '/launcher' && req.method === 'GET') {
       if (req.headers.origin || req.headers.authorization !== `Bearer ${token}`) return reply(403, { error: 'Launcher authentication required.' });
-      return reply(200, { service: 'graphene-launcher', pid: process.pid, features: ['checkpoint-bootstrap-v1', 'public-setup-import-v1', 'node-manager-v1', 'p2p-manager-v1', 'operator-guide-v1', 'wallet-discovery-v1','agent-funding-v1','host-doctor-v1','drawer-tabs-v1','host-monitor-v1','saved-node-removal-v1','checkpoint-reset-v1'] });
+      return reply(200, { service: 'graphene-launcher', pid: process.pid, features: ['checkpoint-bootstrap-v1', 'public-setup-import-v1', 'node-manager-v1', 'p2p-manager-v1', 'operator-guide-v1', 'wallet-discovery-v1','agent-funding-v1','host-doctor-v1','drawer-tabs-v1','host-monitor-v1','saved-node-removal-v1','checkpoint-reset-v1','checkpoint-objects-v1','launcher-checkpoints-v1','checkpoint-node-selection-v1','serving-sentry-checkpoints-v1'] });
     }
     const pageUrl = new URL(req.url, 'http://' + host);
     if (['/', '/operator', '/operator/guide', '/guide'].includes(pageUrl.pathname) && req.method === 'GET') {
@@ -53,7 +51,7 @@ export function createSetupServer({ directory, token = crypto.randomBytes(32).to
       try{const root=fs.realpathSync(new URL('./launcher-icons/',import.meta.url)),file=fs.realpathSync(new URL('./launcher-icons/'+icon[1],import.meta.url));if(!file.startsWith(root+path.sep)||!fs.statSync(file).isFile())return reply(404,{error:'Icon not found'});res.writeHead(200,{'Content-Type':'image/svg+xml; charset=utf-8'});return res.end(fs.readFileSync(file));}catch{return reply(404,{error:'Icon not found'});}
     }
     if(pageUrl.pathname==='/launcher-assets/graphene-logo.png'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'image/png'});return res.end(fs.readFileSync(new URL('./launcher-assets/graphene-logo.png',import.meta.url)));}
-    const publicFiles = { '/manager-ui.js': './node-manager-ui.js', '/guide-ui.js': './node-guide-ui.js', '/operator-guide.md': '../README.md' };
+    const publicFiles = { '/manager-ui.js': './node-manager-ui.js', '/checkpoint-manager-ui.js': './checkpoint-manager-ui.js', '/guide-ui.js': './node-guide-ui.js', '/operator-guide.md': '../README.md' };
     if (Object.hasOwn(publicFiles, pageUrl.pathname) && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': pageUrl.pathname.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/markdown; charset=utf-8' });
       return res.end(fs.readFileSync(new URL(publicFiles[pageUrl.pathname], import.meta.url)));
@@ -131,8 +129,16 @@ export async function startSetupLauncher({ directory, port = 8787, ...options })
       if (!result.features?.includes('host-monitor-v1')) throw Object.assign(new Error('Older Monitor support'), { code: 'OUTDATED_MONITOR' });
       if (!result.features?.includes('saved-node-removal-v1')) throw Object.assign(new Error('Older saved node removal support'), { code: 'OUTDATED_NODE_REMOVAL' });
       if (!result.features?.includes('checkpoint-reset-v1')) throw Object.assign(new Error('Older checkpoint reset support'), { code: 'OUTDATED_CHECKPOINT_RESET', launcherPid: record.pid });
+      if (!result.features?.includes('checkpoint-objects-v1')) throw Object.assign(new Error('Older incremental checkpoint support'), { code: 'OUTDATED_CHECKPOINT_OBJECTS' });
+      if (!result.features?.includes('launcher-checkpoints-v1')) throw Object.assign(new Error('Older launcher checkpoint controls'), { code: 'OUTDATED_CHECKPOINT_CONTROLS' });
+      if (!result.features?.includes('checkpoint-node-selection-v1')) throw Object.assign(new Error('Older checkpoint source selection'), { code: 'OUTDATED_CHECKPOINT_SELECTION' });
+      if (!result.features?.includes('serving-sentry-checkpoints-v1')) throw Object.assign(new Error('Older serving-sentry checkpoint support'), { code: 'OUTDATED_SERVING_CHECKPOINT' });
       return { server: null, token: record.token, reused: true, url: `http://127.0.0.1:${port}/#${record.token}` };
     } catch (error) {
+      if (error.code === 'OUTDATED_SERVING_CHECKPOINT') throw new Error(`Port ${port} runs an older launcher that blocks serving sentries from checkpoint creation. Close that launcher terminal and reopen from the updated folder, then unlock the source node again. Docker node services keep running.`);
+      if (error.code === 'OUTDATED_CHECKPOINT_SELECTION') throw new Error(`Port ${port} runs an older launcher without wallet-node checkpoint selection. Close its launcher terminal and reopen the updated launcher. Docker node services keep running.`);
+      if (error.code === 'OUTDATED_CHECKPOINT_CONTROLS') throw new Error(`Port ${port} runs an older launcher without checkpoint creation and enrollment controls. Close its launcher terminal and reopen the updated launcher. Docker node services keep running.`);
+      if (error.code === 'OUTDATED_CHECKPOINT_OBJECTS') throw new Error(`Port ${port} runs an older launcher without incremental checkpoint downloads. Close its launcher terminal and reopen the updated launcher before publishing checkpoints. Docker node services keep running.`);
       if (error.code === 'OUTDATED_CHECKPOINT_RESET') throw new Error(`Port ${port} is still served by launcher process ${error.launcherPid} without checkpoint reset. Close that original launcher process and reopen from the updated folder; opening a second launcher reuses the existing backend. Docker node services keep running.`);
       if (error.code === 'OUTDATED_NODE_REMOVAL') throw new Error(`Port ${port} runs an older launcher without saved node deletion. Close its launcher terminal and reopen the updated launcher. Docker node services keep running.`);
       if (error.code === 'OUTDATED_MONITOR') throw new Error(`Port ${port} runs an older launcher without Monitor. Close its launcher terminal and reopen npm run join (or join:sentry) from the updated folder. Docker node services keep running.`);

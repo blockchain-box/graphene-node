@@ -34,6 +34,8 @@ services:
       context: ..
       dockerfile: docker/mpt/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-validator}_mpt_db
+    environment:
+      MPT_DB_API_TOKEN: ${MPT_DB_API_TOKEN:?Set MPT_DB_API_TOKEN to a random secret}
     volumes:
       - ../volumes/${NODE_ENV}/validator/mpt/data:/app/data
     healthcheck:
@@ -60,6 +62,8 @@ services:
       POSTGRESSQL_DB_HOST: postgres-validator
       TENDERMINT_HOST: validator-node
       MPT_DB_HOST: mpt-db-validator
+      MPT_DB_API_TOKEN: ${MPT_DB_API_TOKEN:?Set MPT_DB_API_TOKEN to a random secret}
+      SECURITY_ACTIVATION_HEIGHT: ${SECURITY_ACTIVATION_HEIGHT:-0}
       CHAIN_ID: ${CHAIN_ID}
       COIN_SYMBOL: ${COIN_SYMBOL}
     depends_on:
@@ -136,6 +140,8 @@ services:
       POSTGRESSQL_DB_HOST: postgres-validator
       TENDERMINT_HOST: validator-node
       MPT_DB_HOST: mpt-db-validator
+      MPT_DB_API_TOKEN: ${MPT_DB_API_TOKEN:?Set MPT_DB_API_TOKEN to a random secret}
+      SECURITY_ACTIVATION_HEIGHT: ${SECURITY_ACTIVATION_HEIGHT:-0}
       CHAIN_ID: ${CHAIN_ID}
       COIN_SYMBOL: ${COIN_SYMBOL}
     depends_on:

@@ -1,6 +1,30 @@
 /* Public UI. Node passwords and private launcher links are sent only to the authenticated local manager. */
 const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// A nested native dialog keeps the underlying task inert and restores focus on close.
+let launcherConfirmationPending = false;
+function confirmLauncherAction(message, { title = 'Confirm action', accept = 'Confirm', danger = false } = {}) {
+ if (launcherConfirmationPending) return Promise.resolve(false);
+ const dialog = $('confirm-dialog');
+ launcherConfirmationPending = true;
+ $('confirm-title').textContent = title;
+ $('confirm-message').textContent = message;
+ $('confirm-accept').textContent = accept;
+ $('confirm-accept').dataset.danger = String(danger);
+ dialog.returnValue = '';
+ return new Promise(resolve => {
+  const cancel = () => dialog.close('cancel');
+  $('confirm-close').onclick = cancel;
+  $('confirm-cancel').onclick = cancel;
+  $('confirm-accept').onclick = () => dialog.close('confirm');
+  dialog.addEventListener('close', () => {
+   launcherConfirmationPending = false;
+   resolve(dialog.returnValue === 'confirm');
+  }, { once: true });
+  dialog.showModal();
+  $('confirm-cancel').focus();
+ });
+}
 const brief = value => value ? value.slice(0, 8) + '…' + value.slice(-4) : '';
 const launchOptions = new URLSearchParams(location.search);
 let token = location.hash.slice(1);
@@ -41,7 +65,7 @@ async function api(route, method = 'GET', body, host = 'local') {
   ...(remote || method !== 'GET' ? { body: JSON.stringify(remote ? { route, method, body } : body || {}) } : {}), signal: AbortSignal.timeout(route==='/doctor'?60000:['/share','/remotes'].includes(route) ? 120000 : 25000),
  });
  const data = await response.json();
- if (!response.ok){const message=data.error||'The launcher could not complete this action.';if(/not supported/i.test(message)&&route.endsWith('/reset'))throw new Error('Restart the launcher on this host from the updated folder to enable checkpoint reset.');if(/not supported/i.test(message)&&route.endsWith('/remove'))throw new Error('Restart the launcher on this host from the updated folder to enable deleting saved nodes.');if(/not supported/i.test(message)&&(body?.action==='fundAgent'||route==='/doctor'))throw new Error('This host is running an older launcher backend. Restart its launcher from the updated folder to enable agent funding and Doctor. Docker node services keep running.');throw new Error(message);}
+ if (!response.ok){const message=data.error||'The launcher could not complete this action.';if(/not supported|Unsupported checkpoint/i.test(message)&&(/checkpoint-options|checkpoints/.test(route)))throw new Error('Restart the launcher on this host from the updated folder to enable wallet-node checkpoint selection.');if(/not supported/i.test(message)&&route.endsWith('/reset'))throw new Error('Restart the launcher on this host from the updated folder to enable checkpoint reset.');if(/not supported/i.test(message)&&route.endsWith('/remove'))throw new Error('Restart the launcher on this host from the updated folder to enable deleting saved nodes.');if(/not supported/i.test(message)&&(body?.action==='fundAgent'||route==='/doctor'))throw new Error('This host is running an older launcher backend. Restart its launcher from the updated folder to enable agent funding and Doctor. Docker node services keep running.');throw new Error(message);}
  return data;
 }
 function labels(state) { return ({ locked:'Locked · status unknown', starting:'Starting…', stopping:'Stopping…', running:'Running', syncing:'Catching up', stopped:'Stopped', error:'Needs attention', unavailable:'Status unavailable' })[state] || 'Checking…'; }
@@ -251,7 +275,7 @@ function renderDetail() {
  $('detail').innerHTML=`${drawerHeader(node)}<p id="drawer-error" class="error" role="alert"></p><section id="node-runtime" data-node-pane="node" role="tabpanel" aria-labelledby="drawer-tab-node"><p id="selected-status" class="status"></p><div class="next-step"><h3 id="next-title"></h3><p id="next-copy"></p></div><dl class="metrics"><div><dt>Latest block</dt><dd id="metric-height">—</dd></div><div><dt>Connected peers</dt><dd id="metric-peers">—</dd></div><div><dt>Management service</dt><dd id="metric-agent">—</dd></div></dl><p id="checkpoint" class="notice" hidden></p><p id="node-error" class="error" role="alert"></p><div id="agent-connection-alert" class="notice" hidden><p id="agent-connection-error"></p><button id="review-agent-connection" class="link-button">Review connection issue</button></div>${renderNodeIdentity(node)}<div class="actions"><button id="unlock-node" data-icon="unlock-keyhole" class="primary">Unlock node</button><button id="start-node" data-icon="play" class="primary">Start node</button><button id="stop-node" data-icon="square">Stop node</button><button id="lock-node" data-icon="lock-keyhole">Lock controls</button></div><p class="muted">Stopping preserves data and signing state. Locking controls leaves Docker nodes running.</p><div id="downtime-impact"></div><details><summary>Recover from a checkpoint</summary><p>For a stopped node: replace its chain data with the latest verified published checkpoint, retain a backup, then start and catch up. Identity and signing history are preserved. Validators require a checkpoint at or above their last signed height.</p><button id="reset-node">Reset from checkpoint &amp; start</button></details><div class="actions"><button id="download-setup" data-icon="download">Download public setup</button></div><details id="node-guide-details" class="node-guidance" ${node.status?.state==='running'?'':'open'}><summary>Setup checklist & next step</summary><section id="node-setup-guide" class="resume-guide" aria-label="Guided node setup"></section></details></section><section id="live-connections" data-node-pane="connections" hidden></section><div id="drawer-placeholders"></div><div id="chain-panel"><section data-node-pane="node"><h3>Registration & wallet</h3><p class="muted">${wallet?'Checking the network…':'Connect your wallet to register, stake and manage connection requests.'}</p></section></div>${monitorPanel(node)}${doctorPanel(node)}`;
  initializeDrawer();openNodeDrawer();
  $('close-detail').onclick=closeNodeDetail;$('unlock-node').onclick=openUnlock;$('lock-node').onclick=()=>operate('lock');$('start-node').onclick=()=>operate('start');
- $('reset-node').onclick=()=>{if(confirm('Reset '+node.name+' from the latest published checkpoint and start it? Its old chain data will be backed up. Identity and signing history will be preserved.'))void operate('reset');};
+ $('reset-node').onclick=async()=>{if(await confirmLauncherAction('Reset '+node.name+' from the latest published checkpoint and start it? Its old chain data will be backed up. Identity and signing history will be preserved.',{title:'Recover from a checkpoint?',accept:'Choose checkpoint'}))if(current()&&keyFor(current())===keyFor(node))void operate('reset');};
  $('stop-node').onclick=()=>stopSelectedNode();$('download-setup').onclick=downloadSetup;
  updateStatus();updateDrawerPlaceholders();if(chainState&&chainKey===selected+':'+wallet)renderChain();
 }
@@ -260,7 +284,8 @@ const removingNodes=new Set();
 async function deleteSelectedNode(){
  const node=current();if(!node||node.chainOnly||removingNodes.has(keyFor(node)))return;
  const key=keyFor(node);
- if(!confirm('Delete '+node.name+' from this launcher’s list? Its encrypted identity, node data and signing history will be retained. No on-chain registration or stake will change. You can restore the saved entry using its public setup file and original password.'))return;
+ if(!await confirmLauncherAction('Delete '+node.name+' from this launcher’s list? Its encrypted identity, node data and signing history will be retained. No on-chain registration or stake will change. You can restore the saved entry using its public setup file and original password.',{title:'Delete saved node?',accept:'Delete from launcher',danger:true}))return;
+ if(selected!==key||removingNodes.has(key))return;
  removingNodes.add(key);renderChain();
  try{
   await api('/nodes/'+node.id+'/remove','POST',{},node.hostId);
@@ -299,14 +324,19 @@ async function stopSelectedNode() {
    chainState=state;updateStatus();copy='\n\n'+downtimeCopy(state);
    if(!state.exit?.safeToStop)copy+='\nStopping is blocked until validator exit and consensus removal are confirmed.';
   }
-  if(confirm('Stop '+node.name+'? Its node data and signing state will be preserved.'+copy))await operate('stop');
+  const ownerAtConfirmation = wallet;
+  if(await confirmLauncherAction('Stop '+node.name+'? Its node data and signing state will be preserved.'+copy,{title:'Stop node?',accept:'Stop node',danger:true}))if(selected===selectedAtStart&&wallet===ownerAtConfirmation)await operate('stop');
  }catch(error){showError(error);}
 }
 async function operate(action) {
  const node = current(); if (!node) return;
  try {
   if ((['start','reset'].includes(action) || action === 'stop' && node.role === 'validator') && !wallet) { await connectWallet(); if (!wallet) return; }
-  await api('/nodes/' + node.id + '/' + action, 'POST', {wallet,...(action==='reset'?{confirmReset:true}:{})}, node.hostId);
+  const ownerAtStart = wallet;
+  const checkpointProviderId = ['start','reset'].includes(action) && typeof chooseNodeCheckpoint === 'function' ? await chooseNodeCheckpoint(node, action) : undefined;
+  if (checkpointProviderId === null) return;
+  if (['start','reset'].includes(action) && (wallet !== ownerAtStart || !current() || keyFor(current()) !== keyFor(node))) throw new Error('The selected node or wallet changed. Choose the node again before starting.');
+  await api('/nodes/' + node.id + '/' + action, 'POST', {wallet,...(action==='reset'?{confirmReset:true}:{}),...(checkpointProviderId?{checkpointProviderId}:{})}, node.hostId);
   announce((action === 'lock' ? 'Controls locked for ' : action === 'reset' ? 'Restoring checkpoint for ' : action === 'start' ? 'Starting ' : 'Stopping ') + node.name + '.');
   await load(true);
  } catch (error) { showError(error); }

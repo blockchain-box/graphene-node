@@ -79,6 +79,14 @@ export function prepareBootstrapTunnel(folder, host, port = 26656) {
   fs.writeFileSync(path.join(folder, 'bootstrap-client.json'), JSON.stringify({ key: tunnelPublicKey(seed), bootstrap }), { mode: 0o600 });
 }
 
+export function configureMptAuth(profile) {
+  const mpt = profile.services.mpt.environment;
+  const abci = profile.services.abci.environment;
+  const token = mpt.MPT_DB_API_TOKEN || abci.MPT_DB_API_TOKEN || crypto.randomBytes(32).toString('hex');
+  mpt.MPT_DB_API_TOKEN = token;
+  abci.MPT_DB_API_TOKEN = token;
+}
+
 export function composeDefinition(home, peer, network, options = {}) {
   const project = options.project || path.basename(path.dirname(home));
   // Nodes and the tunnel share only this project's default network. The short
@@ -135,6 +143,7 @@ export function composeDefinition(home, peer, network, options = {}) {
   // "abci"/"node" may identify a different project on that network.
   definition.services.node.command[definition.services.node.command.indexOf('--proxy_app') + 1] = `tcp://${project}-abci-1:26658`;
   Object.assign(definition.services.abci.environment, { TENDERMINT_HOST: `${project}-node-1`, APP_ABCI_HOST: `${project}-abci-1`, MPT_DB_HOST: `${project}-mpt-1`, POSTGRESSQL_DB_HOST: `${project}-db-1` });
+  configureMptAuth(definition);
   return definition;
 }
 
@@ -163,7 +172,36 @@ export class LocalNodeRuntime {
     this.file = path.join(this.folder, 'compose.json');
     if (this.state === 'locked') this.state = 'stopped';
   }
-  async start(wallet, { resetCheckpoint = false } = {}) {
+  requiresCheckpoint() {
+    if (!this.folder) return true;
+    const data = path.join(this.folder, 'tendermint/data');
+    return !['state.db', 'blockstore.db'].some(name => fs.existsSync(path.join(data, name)));
+  }
+  async checkpointNetwork() {
+    const saved = this.folder && path.join(this.folder, 'tendermint/config/genesis.json');
+    const genesis = saved && fs.existsSync(saved) ? JSON.parse(fs.readFileSync(saved)) : (await this.read(`${tm}/genesis`)).result.genesis;
+    return genesisHash(genesis);
+  }
+  async checkpointSource({ confirmServing = false } = {}) {
+    if (!this.identity || this.operation) throw new Error('Unlock the source node and wait for its current operation to finish.');
+    const status = await this.status();
+    if (status.state !== 'running' || String(status.votingPower) !== '0') throw new Error('Choose a synchronized, nonvoting source node. Voting nodes cannot be paused for checkpoints.');
+    let activeValidatorCount = 0;
+    if (this.identity.setup.role === 'sentry') {
+      const assignments = await this.read(`${rpc}/graphene/state/platform/assignments?sentryId=${this.identity.setup.agentAddress.toLowerCase()}`);
+      if (!Array.isArray(assignments)) throw new Error('Sentry assignments could not be verified. Refresh and try again.');
+      activeValidatorCount = assignments.filter(assignment => String(assignment.status).toLowerCase() === 'active' && (!assignment.sentryId || assignment.sentryId.toLowerCase() === this.identity.setup.agentAddress.toLowerCase())).length;
+      if (activeValidatorCount > 0 && confirmServing !== true) throw new Error('Confirm that checkpoint capture will pause this serving sentry and interrupt its validator connections.');
+    }
+    const address = (await this.compose(['port', 'node', '26657'])).trim();
+    if (!/^127\.0\.0\.1:\d+$/.test(address)) throw new Error('The source node RPC must be a managed loopback endpoint.');
+    const rpcURL = `http://${address}`;
+    const [live, sourceGenesis, referenceGenesis] = await Promise.all([json(rpcURL + '/status'), json(rpcURL + '/genesis'), this.read(`${tm}/genesis`)]);
+    if (live.result.sync_info.catching_up || String(live.result.validator_info?.voting_power) !== '0') throw new Error('The source is catching up or voting. Choose another node.');
+    if (genesisHash(sourceGenesis.result.genesis) !== genesisHash(referenceGenesis.result.genesis)) throw new Error('The source node belongs to a different network.');
+    return { project: this.project, tm: `${this.project}-node-1`, abci: `${this.project}-abci-1`, mpt: `${this.project}-mpt-1`, db: `${this.project}-db-1`, rpc: rpcURL, agentAddress: this.identity.setup.agentAddress, role: this.identity.setup.role, activeValidatorCount };
+  }
+  async start(wallet, { resetCheckpoint = false, checkpointTrustFile } = {}) {
     if (!this.identity) throw new Error('Unlock your node identity in the local launcher first.');
     if (this.operation) throw new Error('A node operation is already in progress.');
     this.operation = true;
@@ -212,6 +250,8 @@ export class LocalNodeRuntime {
       const desired = composeDefinition(home, `${status.node_info.id}@tendermint-dev:26656`, network, { role: setup.role, secretsPath: this.identity.keystorePath, p2pPort: setup.p2pPort });
       if (!fs.existsSync(this.file)) fs.writeFileSync(this.file, JSON.stringify(desired, null, 2), { flag: 'wx', mode: 0o600 });
       const existingProfile = JSON.parse(fs.readFileSync(this.file));
+      // Persist one shared token, including when upgrading a pre-auth profile.
+      configureMptAuth(existingProfile);
       const proxy = existingProfile.services.node.command.indexOf('--proxy_app') + 1;
       if (proxy > 0 && existingProfile.services.node.command[proxy] === 'tcp://abci:26658') {
         existingProfile.services.node.command[proxy] = desired.services.node.command[proxy];
@@ -247,7 +287,7 @@ export class LocalNodeRuntime {
       configureAgentUpdates(existingProfile.services.agent, updateBinding);
       fs.writeFileSync(this.file, JSON.stringify(existingProfile, null, 2), { mode: 0o600 });
       if (setup.role === 'validator') fs.mkdirSync(path.join(this.folder, 'agent-state'), { recursive: true, mode: 0o700 });
-      await this.bootstrapCheckpoint(home, resetCheckpoint);
+      await this.bootstrapCheckpoint(home, resetCheckpoint, checkpointTrustFile);
       const role = setup.role === 'sentry' ? 'sentry' : 'validator';
       await this.run(['build', '-t', `graphene-${role}-agent:local`, '-f', path.join(root, `agents/${role}-agent/Dockerfile`), root], { timeout: 600000 });
       await this.compose(['up', '-d', '--wait', '--wait-timeout', '150']);
@@ -263,7 +303,7 @@ export class LocalNodeRuntime {
       throw new Error(this.error);
     } finally { this.operation = false; }
   }
-  async bootstrapCheckpoint(home, resetExisting = false) {
+  async bootstrapCheckpoint(home, resetExisting = false, selectedTrustFile = this.checkpointTrustFile) {
     const journal = path.join(this.folder, 'checkpoint-state.json');
     if (fs.existsSync(journal)) {
       const previous = JSON.parse(fs.readFileSync(journal));
@@ -273,9 +313,9 @@ export class LocalNodeRuntime {
     // Ordinary Start resumes saved data; only explicit recovery replaces it.
     if (!resetExisting && (fs.existsSync(path.join(home, 'data/state.db')) || fs.existsSync(path.join(home, 'data/blockstore.db')))) return;
     if (!resetExisting && BigInt(JSON.parse(fs.readFileSync(path.join(home, 'data/priv_validator_state.json'))).height) !== 0n) throw new Error('Signing history exists. Ask your provider to recover the original chain data.');
-    if (!this.checkpointTrustFile || !fs.existsSync(this.checkpointTrustFile)) throw new Error('Checkpoint restoration needs a provider-pinned checkpoint trust file. Configure GRAPHENE_CHECKPOINT_TRUST before starting the launcher. Existing nodes are unaffected.');
+    if (!selectedTrustFile || !fs.existsSync(selectedTrustFile)) throw new Error('Choose an enrolled checkpoint source before starting this node. Existing nodes are unaffected.');
     this.checkpoint = { phase: 'preparing' };
-    const trust = JSON.parse(fs.readFileSync(this.checkpointTrustFile));
+    const trust = JSON.parse(fs.readFileSync(selectedTrustFile));
     if (trust.genesisHash !== genesisHash(JSON.parse(fs.readFileSync(path.join(home, 'config/genesis.json'))))) {
       throw new Error('The checkpoint trust configuration does not match the running chain genesis. A provider must publish and pin a verified checkpoint for this chain; your node identity is preserved.');
     }

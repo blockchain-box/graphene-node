@@ -1,0 +1,30 @@
+[Unit]
+Description=Graphene public read-only checkpoint host
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=graphene-checkpoints
+Group=graphene-checkpoints
+WorkingDirectory=/opt/graphene-node
+ExecStart=/usr/bin/node /opt/graphene-node/scripts/checkpoint-host.js serve --publication /srv/graphene-checkpoints/publication --identity /var/lib/graphene-checkpoints/p2p.json --trust /etc/graphene-checkpoints/trust.json
+EnvironmentFile=-/etc/graphene-checkpoints/host.env
+StateDirectory=graphene-checkpoints
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadOnlyPaths=/srv/graphene-checkpoints/publication /opt/graphene-node /etc/graphene-checkpoints
+ReadWritePaths=/var/lib/graphene-checkpoints
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

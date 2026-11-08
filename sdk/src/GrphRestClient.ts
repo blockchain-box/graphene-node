@@ -14,6 +14,8 @@ import type {
   SyncStatus,
   Tenant,
   TokenInfo,
+  TokenHolder,
+  PaginatedResponse,
   Validator,
   ValidatorPlatformInfo,
   VaultBalances,
@@ -81,8 +83,14 @@ export class GrphRestClient {
     return this.get<Delegation[]>('/graphene/state/stake/my-delegations', { chainId, delegatorAddress });
   }
 
-  async getTokens(): Promise<TokenInfo[]> {
-    return this.get<TokenInfo[]>('/graphene/state/tokens');
+  async getTokens(chainId: string, page = 0, size = 20): Promise<PaginatedResponse<TokenInfo>> {
+    return this.get<PaginatedResponse<TokenInfo>>('/graphene/state/tokens', { chainId, page: String(page), size: String(size) });
+  }
+
+  async getTokenHolders(chainId: string, token: string, page = 0, size = 20): Promise<PaginatedResponse<TokenHolder>> {
+    return this.get<PaginatedResponse<TokenHolder>>('/graphene/state/tokens/holders', {
+      chainId, token, page: String(page), size: String(size),
+    });
   }
 
   async getVaultBalances(address: string): Promise<VaultBalances> {

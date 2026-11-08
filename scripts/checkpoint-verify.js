@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { composeDefinition, bootstrapNetwork, prepareBootstrapTunnel } from './local-node-runtime.js';
 import { docker, inspect, restoreFresh, json, localSource } from './checkpoint-docker.js';
 import { verifyManifest } from './checkpoint-core.js';
+import { archiveNames, materializePublication } from './checkpoint-storage.js';
 
 export async function verifyRestore(directory, trust, { timeout = 900000, reference = localSource, run = docker, read = json } = {}) {
   const envelope = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json')));
@@ -14,6 +15,7 @@ export async function verifyRestore(directory, trust, { timeout = 900000, refere
   const home = path.join(folder, 'tendermint'), file = path.join(folder, 'compose.json');
   const compose = (args) => run(['compose', '-p', project, '-f', file, ...args]);
   try {
+    if (manifest.incremental && archiveNames.some(name => !fs.existsSync(path.join(directory, name)))) directory = await materializePublication(directory, manifest, path.join(folder, 'snapshot'));
     fs.mkdirSync(home, { mode: 0o700 });
     await run(['run', '--rm', '--entrypoint', 'tendermint', '-v', `${home}:/tendermint`, 'tendermint:dev', 'init', '--home', '/tendermint']);
     fs.copyFileSync(path.join(directory, 'genesis.json'), path.join(home, 'config/genesis.json'));
@@ -66,7 +68,7 @@ export async function verifyRestore(directory, trust, { timeout = 900000, refere
     }
     throw new Error('Checkpoint verification timed out before canonical catch-up.');
   } finally {
-    if (fs.existsSync(file)) await compose(['down', '-v', '--remove-orphans']);
-    fs.rmSync(folder, { recursive: true, force: true });
+    try { if (fs.existsSync(file)) await compose(['down', '-v', '--remove-orphans']); }
+    finally { fs.rmSync(folder, { recursive: true, force: true }); }
   }
 }

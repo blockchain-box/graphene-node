@@ -358,12 +358,17 @@ validate_configuration() {
     print_step "Validating Docker Compose configurations"
 
     for compose_file in "$COMPOSE_FILE_VALIDATOR" "$COMPOSE_FILE_SENTRY"; do
+        local role_env="$VALIDATOR_ENV_FILE"
+        [[ "$compose_file" == "$COMPOSE_FILE_SENTRY" ]] && role_env="$SENTRY_ENV_FILE"
+        local env_args=(--env-file "$COMMON_ENV_FILE" --env-file "$role_env")
+        if [[ -n "$LOCAL_ENV_FILE" ]]; then
+            env_args+=(--env-file "$LOCAL_ENV_FILE")
+        fi
         echo -e "Validating: ${BOLD}$(basename "$compose_file")${NC}"
-        if $COMPOSE_CMD -f "$compose_file" config >/dev/null 2>&1; then
+        if $COMPOSE_CMD -f "$compose_file" "${env_args[@]}" config --quiet; then
             print_info "  ✓ Valid configuration"
         else
             print_error "  ✗ Invalid configuration in $compose_file"
-            $COMPOSE_CMD -f "$compose_file" config 2>&1 | head -20
             return 1
         fi
     done
@@ -466,6 +471,7 @@ main() {
 
     # Load and validate configuration
     load_config "$NODE_ENV"
+    source_env_files .env
 
     # Validate configuration only
     if [[ "$VALIDATE_ONLY" == true ]]; then
@@ -490,8 +496,8 @@ main() {
 
     # Add local override if exists
     if [[ -n "$LOCAL_ENV_FILE" ]]; then
-        ENV_FILES_VALIDATOR+=("$LOCAL_ENV_FILE")
-        ENV_FILES_SENTRY+=("$LOCAL_ENV_FILE")
+        ENV_FILES_VALIDATOR+=("--env-file $LOCAL_ENV_FILE")
+        ENV_FILES_SENTRY+=("--env-file $LOCAL_ENV_FILE")
     fi
 
     # Deploy services

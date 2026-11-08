@@ -5,6 +5,7 @@ import os from 'node:os';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { artifacts, appStateSQL, sanitizeAppState, canonical, fileHash, genesisHash, signManifest, verifyManifest, verifyArchive } from './checkpoint-core.js';
+import { archiveNames, createArchiveIndex, readArchiveIndex, unpackArchive, materializePublication } from './checkpoint-storage.js';
 
 const exec = promisify(execFile);
 export const docker = async (args, options = {}) => (await exec('docker', args, { timeout: 180000, maxBuffer: 1024 * 1024, ...options })).stdout;
@@ -34,7 +35,7 @@ const withoutPrefix = (hash) => hash.replace(/^0x/, '').toLowerCase();
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const localSource = { project: 'graphene-local', tm: 'tendermint-dev', abci: 'app-abci-dev', evm: 'app-evm-dev', mpt: 'mpt-db-dev', db: 'postgresql-dev', rpc: 'http://127.0.0.1:26657' };
-export async function exportBootstrap({ output, privateKey, verifyRestore, progress = console.log, source = localSource }) {
+export async function exportBootstrap({ output, privateKey, verifyRestore, progress = console.log, source = localSource, full = false, requireNonVoting = false }) {
   if (typeof verifyRestore !== 'function') throw new Error('Isolated restore verification is required before publication.');
   if (source === localSource) {
     const bootstrap = await inspect(source.tm);
@@ -42,11 +43,16 @@ export async function exportBootstrap({ output, privateKey, verifyRestore, progr
     if (!bootstrap.State.Running || bootstrap.Config.Labels?.['com.docker.compose.service'] !== 'tendermint' || !/^[a-z0-9][a-z0-9_-]*$/.test(project || '')) throw new Error('Start the local Graphene Compose Tendermint service before export.');
     source = { ...source, project };
   }
-  const initial = (await json(`${source.rpc}/status`)).result.sync_info;
+  const initialStatus = (await json(`${source.rpc}/status`)).result;
+  const nonVoting = status => { if (requireNonVoting && String(status.validator_info?.voting_power) !== '0') throw new Error('Checkpoint capture requires a nonvoting source. No writers were stopped.'); };
+  nonVoting(initialStatus);
+  const initial = initialStatus.sync_info;
   let advanced = false;
   for (let attempt = 0; attempt < 8; attempt++) {
     await pause(1000);
-    const current = (await json(`${source.rpc}/status`)).result.sync_info;
+    const status = (await json(`${source.rpc}/status`)).result;
+    nonVoting(status);
+    const current = status.sync_info;
     if (!current.catching_up && BigInt(current.latest_block_height) > BigInt(initial.latest_block_height)) { advanced = true; break; }
   }
   if (!advanced) throw new Error('Reference chain is not advancing. Restore validator quorum first; no writers were stopped and no checkpoint was published.');
@@ -62,90 +68,129 @@ export async function exportBootstrap({ output, privateKey, verifyRestore, progr
   for (const [name, key] of [[source.tm, 'tendermint'], [source.abci, 'abci'], [source.mpt, 'mpt']]) if ((await inspect(name)).Image !== images[key]) throw new Error('Running node images differ from local image tags; coordinate the upgrade before export.');
   const genesis = JSON.parse(await docker(['exec', source.tm, 'cat', '/tendermint/config/genesis.json']));
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'graphene-checkpoint-stage-'));
-  let metadata;
-  // Always resume exactly the services that were running before export.
   try {
-    progress('Preparing: briefly stopping bootstrap writers at a committed boundary.');
-    await docker(['stop', source.tm]);
-    await docker(['stop', ...running.filter((name) => name !== source.tm)]);
-    metadata = sanitizeAppState(await row(source.db));
-    fs.writeFileSync(path.join(stage, 'genesis.json'), canonical(genesis));
-    fs.writeFileSync(path.join(stage, 'app-state.json'), canonical(metadata));
-    const mpt = await volume(source.mpt, '/data');
-    const tmMounts = (await inspect(source.tm)).Mounts;
-    const tmVolume = tmMounts.find((mount) => mount.Type === 'volume' && mount.Destination === '/tendermint/data');
-    const tmHome = tmMounts.find((mount) => mount.Type === 'bind' && mount.Destination === '/tendermint');
-    const tm = tmVolume?.Name || (tmHome && path.join(tmHome.Source, 'data'));
-    if (!tm) throw new Error('Expected managed Tendermint data storage.');
-    await docker(['run', '--rm', '-v', `${mpt}:/source:ro`, '-v', `${stage}:/output`, 'alpine:3.20', 'tar', '-C', '/source', '-czf', '/output/mpt.tar.gz', 'db']);
-    await docker(['run', '--rm', '-v', `${tm}:/source:ro`, '-v', `${stage}:/output`, 'alpine:3.20', 'tar', '-C', '/source', '-czf', '/output/tendermint.tar.gz', 'blockstore.db', 'state.db', 'evidence.db', 'tx_index.db']);
-  } finally {
-    await docker(['start', ...running.filter((name) => name !== source.tm)]);
+    let metadata;
+    // Always resume exactly the services that were running before export.
     try {
-      for (let attempt = 0; attempt < 45; attempt++) {
-        if ((await inspect(source.abci)).State.Health?.Status === 'healthy') break;
-        await pause(1000);
-      }
+      nonVoting((await json(`${source.rpc}/status`)).result);
+      progress('Preparing: briefly stopping the selected source writers at a committed boundary.');
+      await docker(['stop', source.tm]);
+      await docker(['stop', ...running.filter((name) => name !== source.tm)]);
+      metadata = sanitizeAppState(await row(source.db));
+      fs.writeFileSync(path.join(stage, 'genesis.json'), canonical(genesis));
+      fs.writeFileSync(path.join(stage, 'app-state.json'), canonical(metadata));
+      const mpt = await volume(source.mpt, '/data');
+      const tmMounts = (await inspect(source.tm)).Mounts;
+      const tmVolume = tmMounts.find((mount) => mount.Type === 'volume' && mount.Destination === '/tendermint/data');
+      const tmHome = tmMounts.find((mount) => mount.Type === 'bind' && mount.Destination === '/tendermint');
+      const tm = tmVolume?.Name || (tmHome && path.join(tmHome.Source, 'data'));
+      if (!tm) throw new Error('Expected managed Tendermint data storage.');
+      // Capture without compression while writers are stopped. After restart the
+      // publisher compresses only entries missing from the previous checkpoint.
+      await docker(['run', '--rm', '-v', `${mpt}:/source:ro`, '-v', `${stage}:/output`, 'alpine:3.20', 'tar', '-C', '/source', '-cf', '/output/mpt.tar', 'db']);
+      await docker(['run', '--rm', '-v', `${tm}:/source:ro`, '-v', `${stage}:/output`, 'alpine:3.20', 'tar', '-C', '/source', '-cf', '/output/tendermint.tar', 'blockstore.db', 'state.db', 'evidence.db', 'tx_index.db']);
     } finally {
-      await docker(['start', source.tm]);
-      const publishedPort = (await inspect(source.tm)).NetworkSettings.Ports?.['26657/tcp']?.[0];
-      if (publishedPort && ['127.0.0.1', '0.0.0.0'].includes(publishedPort.HostIp)) source.rpc = `http://127.0.0.1:${publishedPort.HostPort}`;
-      for (let attempt = 0; attempt < 45; attempt++) {
-        try { await json(`${source.rpc}/status`); break; } catch { await pause(1000); }
+      await docker(['start', ...running.filter((name) => name !== source.tm)]);
+      try {
+        for (let attempt = 0; attempt < 45; attempt++) {
+          if ((await inspect(source.abci)).State.Health?.Status === 'healthy') break;
+          await pause(1000);
+        }
+      } finally {
+        await docker(['start', source.tm]);
+        const publishedPort = (await inspect(source.tm)).NetworkSettings.Ports?.['26657/tcp']?.[0];
+        if (publishedPort && ['127.0.0.1', '0.0.0.0'].includes(publishedPort.HostIp)) source.rpc = `http://127.0.0.1:${publishedPort.HostPort}`;
+        for (let attempt = 0; attempt < 45; attempt++) {
+          try { await json(`${source.rpc}/status`); break; } catch { await pause(1000); }
+        }
       }
     }
-  }
-  const result = await publishCheckpoint({ inputDirectory: stage, output, privateKey, verifyRestore, source, progress });
-  fs.rmSync(stage, { recursive: true, force: true });
-  return result;
+    return await publishCheckpoint({ inputDirectory: stage, output, privateKey, verifyRestore, source, progress, full });
+  } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }
 
 // Publish an earlier, already-captured checkpoint without pausing chain writers.
 // This also permits bootstrap when the current tip has lost validator quorum:
 // the checkpoint itself must still anchor to an available canonical next header.
-export async function publishCheckpoint({ inputDirectory, output, privateKey, verifyRestore, source = localSource, progress = console.log }) {
+export async function publishCheckpoint({ inputDirectory, output, privateKey, verifyRestore, source = localSource, progress = console.log, full = false, run = docker, read = json }) {
   if (typeof verifyRestore !== 'function') throw new Error('Isolated restore verification is required.');
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'graphene-checkpoint-stage-'));
-  for (const name of artifacts) {
-    const file = path.join(inputDirectory, name);
-    if (!fs.statSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) throw new Error('Checkpoint inputs must be regular files.');
-    fs.copyFileSync(file, path.join(stage, name));
-  }
-  const metadata = sanitizeAppState(JSON.parse(fs.readFileSync(path.join(stage, 'app-state.json'))));
-  fs.writeFileSync(path.join(stage, 'app-state.json'), canonical(metadata));
-  const genesis = JSON.parse(fs.readFileSync(path.join(stage, 'genesis.json')));
-  const referenceGenesis = (await json(`${source.rpc}/genesis`)).result.genesis;
-  if (genesisHash(genesis) !== genesisHash(referenceGenesis)) throw new Error('Snapshot genesis does not match the trusted reference chain.');
-  const images = await imageIDs();
-  await verifyArchive(path.join(stage, 'mpt.tar.gz'), 'mpt');
-  await verifyArchive(path.join(stage, 'tendermint.tar.gz'), 'tendermint');
-  const height = Number(metadata.current_height);
-  let next;
-  for (let attempt = 0; attempt < 45; attempt++) {
-    try { next = (await json(`${source.rpc}/block?height=${height + 1}`)).result; break; } catch { await pause(1000); }
-  }
-  if (!next || withoutPrefix(metadata.current_app_root) !== next.block.header.app_hash.toLowerCase()) throw new Error('Exported application state does not match canonical committed history. Nothing published.');
-  const block = (await json(`${source.rpc}/block?height=${height}`)).result;
-  const files = {};
-  for (const name of artifacts) files[name] = { bytes: fs.statSync(path.join(stage, name)).size, sha256: await fileHash(path.join(stage, name)) };
-  const manifest = { format: 1, kind: 'graphene-local-checkpoint', id: `height-${height}-${crypto.randomBytes(6).toString('hex')}`, chainId: 9876, network: genesis.chain_id, genesisHash: genesisHash(genesis), height: String(height), appHash: withoutPrefix(metadata.current_app_root), blockHash: block.block_id.hash, createdAt: new Date().toISOString(), images, files };
-  const trust = { chainId: 9876, genesisHash: manifest.genesisHash, publicKey: crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }), maxAgeHours: 24 };
-  fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify(signManifest(manifest, privateKey), null, 2));
-  progress('Verifying: restoring into an isolated nonvoting node and checking canonical catch-up.');
-  manifest.verification = await verifyRestore(stage, trust);
-  verifyManifest(signManifest(manifest, privateKey), trust);
-  fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify(signManifest(manifest, privateKey), null, 2));
-  const destination = path.join(output, manifest.id);
-  fs.mkdirSync(output, { recursive: true });
-  fs.cpSync(stage, destination + '.partial', { recursive: true, errorOnExist: true, force: false });
-  fs.chmodSync(destination + '.partial', 0o755);
-  for (const name of [...artifacts, 'manifest.json']) fs.chmodSync(path.join(destination + '.partial', name), 0o644);
-  fs.renameSync(destination + '.partial', destination);
-  fs.rmSync(stage, { recursive: true, force: true });
-  fs.copyFileSync(path.join(destination, 'manifest.json'), path.join(output, 'latest.json.tmp'));
-  fs.renameSync(path.join(output, 'latest.json.tmp'), path.join(output, 'latest.json'));
-  progress(`Published verified checkpoint at height ${height}.`);
-  return { manifest, trust, directory: destination };
+  try {
+    for (const name of ['genesis.json', 'app-state.json']) {
+      const file = path.join(inputDirectory, name);
+      if (!fs.statSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) throw new Error('Checkpoint inputs must be regular files.');
+      fs.copyFileSync(file, path.join(stage, name));
+    }
+    const metadata = sanitizeAppState(JSON.parse(fs.readFileSync(path.join(stage, 'app-state.json'))));
+    fs.writeFileSync(path.join(stage, 'app-state.json'), canonical(metadata));
+    const genesis = JSON.parse(fs.readFileSync(path.join(stage, 'genesis.json')));
+    const referenceGenesis = (await read(`${source.rpc}/genesis`)).result.genesis;
+    if (genesisHash(genesis) !== genesisHash(referenceGenesis)) throw new Error('Snapshot genesis does not match the trusted reference chain.');
+    const images = await imageIDs(run);
+    const height = Number(metadata.current_height);
+    const trust = { chainId: 9876, genesisHash: genesisHash(genesis), publicKey: crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }), maxAgeHours: 24 };
+    if (archiveNames.some(name => !fs.existsSync(path.join(inputDirectory, name)) && !fs.existsSync(path.join(inputDirectory, name.replace(/\.gz$/, ''))))) {
+      const envelope = JSON.parse(fs.readFileSync(path.join(inputDirectory, 'manifest.json')));
+      const earlier = verifyManifest(envelope, { ...trust, maxAgeHours: Number.MAX_SAFE_INTEGER });
+      inputDirectory = await materializePublication(inputDirectory, earlier, path.join(stage, 'input'));
+    }
+    let parent = null, previousIndex = null;
+    if (!full && fs.existsSync(path.join(output, 'latest.json'))) {
+      const latest = path.join(output, 'latest.json');
+      if (fs.statSync(latest).size > 65536) throw new Error('Previous checkpoint manifest is too large.');
+      // Historical parents may be expired. Only the new publication's freshness
+      // is trusted by receivers; reuse still requires its signature and hashes.
+      const envelope = JSON.parse(fs.readFileSync(latest));
+      const previous = verifyManifest(envelope, { ...trust, maxAgeHours: Number.MAX_SAFE_INTEGER });
+      if (canonical(previous.images) === canonical(images) && BigInt(previous.height) < BigInt(height)) {
+        if (previous.incremental) {
+          previousIndex = await readArchiveIndex(path.join(output, previous.id, 'index.json'), previous.incremental.index, previous.files);
+          parent = { id: previous.id, height: previous.height, sha256: crypto.createHash('sha256').update(canonical(previous)).digest('hex') };
+        }
+      }
+    }
+    for (const name of archiveNames) {
+      const rawName = name.replace(/\.gz$/, ''), raw = path.join(stage, rawName);
+      const input = path.join(inputDirectory, fs.existsSync(path.join(inputDirectory, rawName)) ? rawName : name);
+      if (!fs.lstatSync(input).isFile()) throw new Error('Checkpoint inputs must be regular files.');
+      fs.copyFileSync(input, path.join(stage, path.basename(input)));
+      const kind = name === 'mpt.tar.gz' ? 'mpt' : 'tendermint';
+      if (input.endsWith('.gz')) {
+        await verifyArchive(path.join(stage, name), kind);
+        await unpackArchive(path.join(stage, name), raw);
+      } else await verifyArchive(raw, kind, { compressed: false });
+    }
+    progress(parent ? `Preparing: reusing checkpoint ${parent.id}.` : 'Preparing: creating a self-contained checkpoint base.');
+    const packed = await createArchiveIndex(stage, output, previousIndex);
+    const incremental = { format: 1, parent, index: packed.index };
+    progress(`Prepared archives: reused ${packed.stats.reusedChunks} entries (${packed.stats.reusedBytes} compressed bytes); compressed ${packed.stats.createdChunks} entries (${packed.stats.createdBytes} bytes).`);
+    let next;
+    for (let attempt = 0; attempt < 45; attempt++) {
+      try { next = (await read(`${source.rpc}/block?height=${height + 1}`)).result; break; } catch { await pause(1000); }
+    }
+    if (!next || withoutPrefix(metadata.current_app_root) !== next.block.header.app_hash.toLowerCase()) throw new Error('Exported application state does not match canonical committed history. Nothing published.');
+    const block = (await read(`${source.rpc}/block?height=${height}`)).result;
+    const files = {};
+    for (const name of artifacts) files[name] = { bytes: fs.statSync(path.join(stage, name)).size, sha256: await fileHash(path.join(stage, name)) };
+    const manifest = { format: 1, kind: 'graphene-local-checkpoint', id: `height-${height}-${crypto.randomBytes(6).toString('hex')}`, chainId: 9876, network: genesis.chain_id, genesisHash: genesisHash(genesis), height: String(height), appHash: withoutPrefix(metadata.current_app_root), blockHash: block.block_id.hash, createdAt: new Date().toISOString(), images, files, incremental, ...(source.agentAddress ? { source: { agentAddress: source.agentAddress, role: source.role } } : {}) };
+    fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify(signManifest(manifest, privateKey), null, 2));
+    progress('Verifying: restoring into an isolated nonvoting node and checking canonical catch-up.');
+    manifest.verification = await verifyRestore(stage, trust);
+    verifyManifest(signManifest(manifest, privateKey), trust);
+    fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify(signManifest(manifest, privateKey), null, 2));
+    const destination = path.join(output, manifest.id);
+    fs.mkdirSync(output, { recursive: true });
+    fs.mkdirSync(destination + '.partial', { mode: 0o755 });
+    for (const name of ['genesis.json', 'app-state.json', 'index.json', 'manifest.json']) {
+      fs.copyFileSync(path.join(stage, name), path.join(destination + '.partial', name));
+      fs.chmodSync(path.join(destination + '.partial', name), 0o644);
+    }
+    fs.renameSync(destination + '.partial', destination);
+    fs.copyFileSync(path.join(destination, 'manifest.json'), path.join(output, 'latest.json.tmp'));
+    fs.renameSync(path.join(output, 'latest.json.tmp'), path.join(output, 'latest.json'));
+    progress(`Published verified checkpoint at height ${height}.`);
+    return { manifest, trust, directory: destination, stats: packed.stats };
+  } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }
 
 function identityFiles(home) {

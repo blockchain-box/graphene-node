@@ -31,6 +31,9 @@ def selected_files():
         'scripts/update-e2e.js',
         'scripts/update-runtime.js',
         'scripts/checkpoint-core.js', 'scripts/checkpoint-docker.js',
+        'scripts/checkpoint-storage.js', 'scripts/checkpoint-serving.js',
+        'scripts/checkpoint-trust.js', 'scripts/checkpoint-enroll.js',
+        'scripts/launcher-checkpoints.js', 'scripts/checkpoint-manager-ui.js',
     ]]
     files += sorted((ROOT / 'scripts/launcher-icons').glob('*.svg'))
     files += [ROOT / 'scripts/launcher-icons/LICENSE', ROOT / 'scripts/launcher-icons/LUCIDE_LICENSE', ROOT / 'scripts/launcher-assets/graphene-logo.png']
@@ -62,7 +65,7 @@ def main():
         package_file = staging / 'package.json'
         package = json.loads(package_file.read_text())
         package['scripts'] = {key: value for key, value in package['scripts'].items()
-                              if key in ['join', 'join:sentry', 'doctor', 'update', 'test:update:e2e']}
+                              if key in ['join', 'join:sentry', 'doctor', 'update', 'test:update:e2e', 'checkpoint:enroll']}
         package_file.write_text(json.dumps(package, indent=2) + '\n')
         # Refresh the staged lockfile for the kit's reduced package manifest.
         # Never run dependency lifecycle scripts while packaging.

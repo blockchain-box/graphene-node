@@ -45,9 +45,20 @@ export interface VaultBalances {
   deposited: Coin;
 }
 
-export interface TokenInfo {
-  chainId: string;
+export interface TokenHolder {
   address: string;
+  balance: string;
+}
+
+export interface TokenInfo {
+  name?: string;
+  creator?: string;
+  creationNonce?: string;
+  totalSupply: string;
+  chainId: number;
+  address: { address: string; value?: string; bytes?: number[]; zero?: boolean };
+  logoURI?: string;
+  marked: boolean;
   symbol: string;
   decimals: number;
 }
@@ -57,7 +68,15 @@ export interface Tenant {
   name: string;
 }
 
+export interface PaginatedResponse<T> {
+  items: T[];
+  totalCount: number;
+  page: number;
+  size: number;
+}
+
 export interface ChainConfig {
+  tokenCreationFee: string | null;
   chainId: string;
   minStake: string;
   minDelegate: string;

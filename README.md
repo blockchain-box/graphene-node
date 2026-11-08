@@ -150,6 +150,39 @@ A node can remain running while its launcher or tunnel is unavailable.
 
 ## Checkpoints and provider preparation
 
+Open **Checkpoints** in the launcher’s overview and choose the computer or
+connected server that will run the operation. **Enroll a checkpoint provider**
+accepts its public enrollment URL, independently approved publisher fingerprint
+and canonical genesis hash. The selected host verifies a fresh signed checkpoint
+before installing trust for its nodes. Existing enrollment is preserved.
+
+On a host with the full provider checkout, connect your owner wallet and choose
+a **Source node from your wallet**. **Create & verify checkpoint** captures that
+node's managed stack, briefly pauses/resumes its writers, and performs the
+isolated restore test. Only unlocked, synchronized nodes with zero voting power
+are eligible. Sentries with active validator assignments can be used after an
+explicit interruption warning: capture pauses the sentry and temporarily interrupts
+its validator connections, which may affect network access and voting. The host
+rechecks assignments and requires a separate acknowledgment before capture.
+Unknown assignments and voting nodes remain blocked. The launcher never falls back to the voting bootstrap for this
+operation. Confirm the selected node's pause in the launcher. Creation runs in
+the background with progress in this panel; keep the host’s launcher running.
+It generates the private publisher key once on that host when needed, reuses
+unchanged checkpoint content, and shows the public URL, fingerprint and genesis
+pin after success. Files are published locally; transfer to a separate public
+checkpoint host remains manual. The operator kit supports enrollment; creation
+requires the provider checkout and verifier.
+
+Launcher creation stores public publisher details in
+`.checkpoints/publisher-trust.json`, separately from receiver enrollment in
+`.checkpoints/trust.json`. It never replaces the selected host’s enrolled provider.
+For a separate read-only checkpoint host, use the creator’s public
+`publisher-trust.json` as that host’s trust configuration, alongside the complete
+publication tree.
+Publication storage, publisher key location (`GRAPHENE_CHECKPOINT_KEY`) and
+receiver trust path are host configuration; browser requests cannot choose them.
+Restart an older launcher backend to load these controls.
+
 Ask your provider for its approved public trust JSON and independently verify its
 publisher fingerprint. Put it at `.checkpoints/trust.json` on the node host, or
 set `GRAPHENE_CHECKPOINT_TRUST` to its absolute path before launching. A fresh,
@@ -160,14 +193,152 @@ The provider publisher CLI is part of the full source checkout:
 
 ```sh
 npm run checkpoint -- keygen  # Once; keep the publisher private key private
-npm run checkpoint -- export
+npm run checkpoint -- export --url grph://HOST_KEY/checkpoints/latest.json  # First export
+npm run checkpoint -- export  # Later exports reuse the saved publisher URL
 ```
+
+Use the public URL printed by the dedicated checkpoint host or derived from an
+already-shared provider launcher. `HOST_KEY` is that host’s public Grph key, without
+the private launcher access code. Creating a checkpoint in the launcher generates
+the publisher key automatically. CLI creation requires the one-time `keygen` step.
+Both creation paths save public publisher configuration in
+`.checkpoints/publisher-trust.json` and preserve receiver enrollment. The CLI reads
+`--url` first, then saved publisher configuration, then legacy receiver trust as a
+compatibility fallback. `--publisher-trust FILE` selects another publisher file.
+
+**First Start node** and **Recover from a checkpoint** open a source-selection
+dialog. It lists enrolled providers and published checkpoints from nodes owned by
+the connected wallet on connected hosts. Node choices show their name, host,
+checkpoint height, timestamp, publisher fingerprint and genesis pin. Nodes with
+no fresh published checkpoint and checkpoints from another network are disabled.
+Choose a source explicitly; canceling leaves node data untouched. Ordinary
+restart resumes existing data without selecting or restoring a checkpoint.
+
+Wallet-node checkpoints use immutable manifest URLs and signed source-node
+identities, so publishing another node's snapshot cannot silently change a
+selection. The target host verifies and stores each selected source separately
+under its private `providers/` trust directory. Global receiver enrollment stays
+unchanged. Existing-node recovery still requires a stopped node and a checkpoint
+at or above its signing height; all archive, signature, genesis and image checks
+remain enforced. CLI `export` without a managed source retains the legacy bootstrap
+capture behavior; use launcher wallet-node capture to avoid pausing a voting node.
+
+Exports automatically reuse unchanged database entries from the last compatible
+publication. Writers resume after an uncompressed capture; only new or changed
+entries are compressed afterward. The signed manifest records the previous
+checkpoint and pins a complete archive index. Removed files are omitted from that
+index. The first export after upgrading an archive-only publisher creates a new
+base; later exports reuse it. Use `npm run checkpoint -- export --full` to start a
+new base deliberately, including after changing publisher trust.
+
+The publisher stores compressed entries once under
+`.checkpoints/publication/objects/`. Updated receivers retain verified entries
+in their checkpoint cache and download only missing content. A fresh receiver
+downloads all entries listed by the latest index directly; it does not need old
+manifests or a chain of delta restores. Every reconstructed archive must match its
+signed full hash and pass the existing archive and restore checks. Database
+compaction can replace files, so savings depend on how much content is unchanged.
+
+Restart the provider launcher from the updated checkout before publishing this
+format. It serves the index and shared objects, and streams complete resumable
+archive downloads for older receivers. Serve and back up the **whole publication
+tree**, including `objects/`; a checkpoint directory by itself is incomplete.
+Keep any objects referenced by retained checkpoint indexes. Automatic object
+garbage collection is not implemented; failed verification can leave unreferenced
+objects, while the previous `latest.json` stays unchanged. The `publish` and
+`verify` commands accept checkpoint directories in this shared publication tree.
+Capturing, hashing and restore verification still inspect the full snapshot, and
+temporary export/restore storage must accommodate uncompressed data.
 
 Export briefly stops and resumes bootstrap writers and publishes only after an
 isolated restore and canonical catch-up test. The default publication directory
 is `.checkpoints/publication/`, served by the provider launcher at `/checkpoints/`.
 Remote checkpoint URLs use the provider's public Grph P2P key without its launcher
 access code. See [Signed local checkpoint bootstrap](#signed-local-checkpoint-bootstrap) before publishing or restoring.
+
+### Public read-only checkpoint hosting
+
+Run the dedicated checkpoint host on an always-on machine. It exposes only
+allowlisted checkpoint downloads, public enrollment JSON and a health check over
+Grph P2P. It has no node-manager, wallet, upload, deletion or signing endpoints.
+The HTTP listener binds to loopback; do not expose that listener to the Internet.
+The host needs Node.js and the reviewed release's dependencies, plus the public
+publication tree and public publisher trust JSON. It does not need Docker, a
+validator identity, or the publisher's private signing key.
+
+The public location is `grph://HOST_KEY/checkpoints/latest.json`. Its Grph identity
+is separate from the publisher signing identity and the node-manager identity.
+Back up the host's private transport seed outside the publication tree: keeping
+that file preserves the public location across restarts. The host checks the
+latest manifest's signature, network, freshness and restore attestation against
+its installed trust configuration; an expired or invalid latest manifest returns
+503. Downloads are limited to eight concurrent requests by default. Each joining
+validator still enforces its own pinned trust, file hashes and restore checks.
+
+For a Linux host with systemd, install reviewed application source and dependencies
+at `/opt/graphene-node`, with `/usr/bin/node` pointing to the supported Node.js
+runtime. Create a dedicated account with no login shell and no Docker membership:
+
+```sh
+sudo useradd --system --user-group --home-dir /var/lib/graphene-checkpoints --shell /usr/sbin/nologin graphene-checkpoints
+sudo install -d -o root -g root -m 0755 /srv/graphene-checkpoints/publication /etc/graphene-checkpoints
+sudo install -d -o graphene-checkpoints -g graphene-checkpoints -m 0700 /var/lib/graphene-checkpoints
+```
+
+Generate the hosting identity before the first publication, without starting any
+node or network service:
+
+```sh
+sudo -u graphene-checkpoints /usr/bin/node /opt/graphene-node/scripts/checkpoint-host.js identity \
+  --publication /srv/graphene-checkpoints/publication \
+  --identity /var/lib/graphene-checkpoints/p2p.json
+```
+
+Use the printed `manifestURL` as `--url` when exporting on the publisher. Transfer
+only the sanitized publication tree and approved public trust JSON to the host.
+Place the tree under `/srv/graphene-checkpoints/publication/` and the trust JSON at
+`/etc/graphene-checkpoints/trust.json`. Keep them administrator-owned, readable
+but not writable by the service account. Copy shared objects and immutable
+checkpoint directories first; atomically replace `latest.json` only after all
+referenced content is present. Never copy publisher keys, wallets or live node
+directories to this host.
+
+Install the supplied service, which mounts the publication and application paths
+read-only and allows persistent writes only to the transport identity directory:
+
+```sh
+sudo install -m 0644 /opt/graphene-node/deploy/checkpoint-host/graphene-checkpoints.service /etc/systemd/system/graphene-checkpoints.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now graphene-checkpoints
+sudo journalctl -u graphene-checkpoints -n 30 --no-pager
+```
+
+If using a private DHT bootstrap, set `GRAPHENE_DHT_BOOTSTRAP=host:port,...` in
+`/etc/graphene-checkpoints/host.env`. Allow the tested Grph UDP/DHT connectivity
+through the host's firewall. Keep administrative access restricted. Validate the
+public URL from a separate machine before sharing it. Service confinement follows
+[systemd's execution sandbox settings](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml).
+The unit is a deployment template and must be checked on the chosen Linux host.
+
+For joining validators, distribute the host URL, publisher SHA-256 fingerprint and
+canonical genesis hash through an independent authenticated channel. The host's
+public `/checkpoints/enrollment.json` endpoint alone is not a source of trust.
+The full source and updated operator kit provide a pinned enrollment command:
+
+```sh
+npm run checkpoint:enroll -- \
+  --url grph://HOST_KEY/checkpoints/enrollment.json \
+  --fingerprint APPROVED_PUBLISHER_SHA256 \
+  --genesis APPROVED_CANONICAL_GENESIS_HASH
+npm run doctor
+```
+
+Enrollment checks those independent pins and a fresh signed latest manifest
+before creating `.checkpoints/trust.json`. It refuses to overwrite existing trust
+and keeps the validator's default 24-hour freshness policy. Then start the fresh
+node normally. Hosting does not change the current fixed development network's
+genesis/image compatibility requirements or implement public testnet provisioning.
+Checkpoint scheduling and uploads remain manual; this service adds no cron job.
 
 ## Software updates
 
@@ -604,8 +775,14 @@ and `graphene-local`. From the full
 Graphene workspace, the provider can build the stack with:
 
 ```sh
+# Create the bootstrap stack's retained local secret once.
+test -e graphene-quarkus/.env || (umask 077; printf 'MPT_DB_API_TOKEN=%s\n' "$(openssl rand -hex 32)" > graphene-quarkus/.env)
 docker compose -p graphene-local -f graphene-quarkus/docker-compose.yml up -d --build
 ```
+
+The launcher generates a separate random MPT API token for each node and retains
+it in that node's private Compose profile across restarts. Existing profiles gain
+the shared MPT/ABCI token on their next start.
 
 This is a developer/provider command; the source kit does not contain the
 Quarkus blockchain repository. Confirm ready APIs and advancing blocks first.
@@ -801,7 +978,7 @@ Create an Ed25519 publisher key once, then reuse it for subsequent exports:
 
 ```sh
 npm run checkpoint -- keygen
-npm run checkpoint -- export
+npm run checkpoint -- export --url grph://HOST_KEY/checkpoints/latest.json  # First publication
 ```
 
 Keep `.checkpoints/publisher.pem` private and securely backed up. It is separate
@@ -848,7 +1025,7 @@ For a packaged explorer, rebuild/deploy static assets after export, or serve
 checkpoints from a separate persistent directory; running images do not pick up
 source-file changes automatically.
 
-Successful export writes `.checkpoints/trust.json`. Transfer this **public trust
+Successful export writes `.checkpoints/publisher-trust.json`. Transfer this **public trust
 configuration** through a trusted channel and independently authenticate the
 publisher fingerprint. Install it on each node host at the extracted kit's
 `.checkpoints/trust.json`, or set `GRAPHENE_CHECKPOINT_TRUST` as in section 6.
@@ -973,7 +1150,7 @@ operator kit), create an Ed25519 publisher key once:
 
 ```sh
 npm run checkpoint -- keygen
-npm run checkpoint -- export
+npm run checkpoint -- export --url grph://HOST_KEY/checkpoints/latest.json  # First publication
 ```
 
 The private key defaults to `.checkpoints/publisher.pem` (mode 0600), outside the
@@ -1031,11 +1208,12 @@ directories and atomically replaces the small signed latest manifest.
 
 ### Operator enrollment and automatic restore
 
-After successful publication, `.checkpoints/trust.json` pins the publisher public
-key, genesis hash, chain ID, manifest URL and default 24-hour manifest age policy.
-For the local full workspace, the launcher finds this file automatically. For
-the downloadable kit or another host, transfer the **public trust configuration**
-through a trusted channel and set GRAPHENE_CHECKPOINT_TRUST before running join:
+After successful publication, `.checkpoints/publisher-trust.json` records the
+publisher public key, genesis hash, chain ID, manifest URL and default 24-hour
+manifest age policy. Receiver enrollment remains separate. On each node host, use
+the launcher’s Checkpoints panel to enroll, or transfer this **public trust
+configuration** through a trusted channel and install it as `.checkpoints/trust.json`.
+For a custom receiver location, set GRAPHENE_CHECKPOINT_TRUST before running join:
 
 Alternatively, a provider can place the approved public configuration at
 `.checkpoints/trust.json` inside the extracted kit, so desktop launchers find it
@@ -1546,6 +1724,19 @@ config/, health/          Compose configuration and health checks
 `deploy.sh` is the separate Compose maintenance entry point for the bundled stack;
 use `bash deploy.sh --help` to inspect its options. It is not the launcher startup
 command and does not provision the current development bootstrap automatically.
+Before using that bundled stack, create `graphene-node/.env` once from this
+directory and validate both roles:
+
+```sh
+test -e .env || (umask 077; printf 'MPT_DB_API_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env)
+bash deploy.sh --validate-only local
+```
+
+If `.env` already exists, retain its token or add `MPT_DB_API_TOKEN` with a random
+secret of at least 32 characters. `deploy.sh` loads this ignored file for both
+roles. `SECURITY_ACTIVATION_HEIGHT` defaults to `0`; set a coordinated value for
+an existing network when required.
+
 Git LFS is needed when retrieving the bundled `chain/` artifacts to build those
 images. The current launcher expects the prepared `graphene-local` bootstrap and
 development images; providers working in the full Graphene workspace prepare

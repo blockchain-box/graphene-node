@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { get as httpGet } from 'node:http';
 import { get as httpsGet } from 'node:https';
 import { validGrphKey, openGrphClient } from '../agents/lib/grph-tunnel.js';
+import { hashFile, matchesFile, validateIncremental, readArchiveIndex, objectFile, assembleArchive } from './checkpoint-storage.js';
 
 export const artifacts = ['genesis.json', 'app-state.json', 'mpt.tar.gz', 'tendermint.tar.gz'];
 export function canonical(value) {
@@ -16,11 +17,7 @@ export function canonical(value) {
 export function genesisHash(genesis) {
   return crypto.createHash('sha256').update(canonical({ ...genesis, initial_height: String(Math.max(1, Number(genesis.initial_height || 0))) })).digest('hex');
 }
-export async function fileHash(file) {
-  const hash = crypto.createHash('sha256');
-  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
-  return hash.digest('hex');
-}
+export const fileHash = hashFile;
 export function signManifest(manifest, privateKey) {
   return { manifest, signature: crypto.sign(null, Buffer.from(canonical(manifest)), privateKey).toString('base64') };
 }
@@ -34,6 +31,9 @@ export function verifyManifest(envelope, trust, { requireVerified = true, now = 
   if (requireVerified && (!m.verification?.caughtUp || !Number.isSafeInteger(m.verification.height) || m.verification.height <= Number(m.height) || !/^[a-f0-9]{64}$/i.test(m.verification.appHash || ''))) throw new Error('Checkpoint has not passed isolated restore and catch-up verification.');
   if (Object.keys(m.files || {}).sort().join() !== [...artifacts].sort().join()) throw new Error('Unexpected checkpoint artifact list.');
   for (const [name, file] of Object.entries(m.files)) if (!/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isSafeInteger(file.bytes) || file.bytes < 1 || file.bytes > (name.endsWith('.json') ? 1024 ** 2 : 8 * 1024 ** 3)) throw new Error('Invalid checkpoint artifact size or hash.');
+  if (m.incremental !== undefined) validateIncremental(m.incremental, m.height);
+  if (m.source !== undefined && (!/^0x[a-f0-9]{40}$/i.test(m.source.agentAddress || '') || !['validator', 'sentry'].includes(m.source.role))) throw new Error('Invalid checkpoint source identity.');
+  if (trust.sourceAgentAddress && m.source?.agentAddress?.toLowerCase() !== trust.sourceAgentAddress.toLowerCase()) throw new Error('Checkpoint source does not match the selected wallet node.');
   return m;
 }
 export function sanitizeAppState(row) {
@@ -53,10 +53,10 @@ export function appStateSQL(row) {
 // Validate every tar header BEFORE Docker extraction: only regular database
 // files/directories are accepted. Links, devices, traversal and GNU/PAX extensions
 // are rejected. Limits also bound decompression and inode exhaustion.
-export async function verifyArchive(file, kind, { maxBytes = 32 * 1024 ** 3, maxEntries = 100000 } = {}) {
+export async function verifyArchive(file, kind, { maxBytes = 32 * 1024 ** 3, maxEntries = 100000, compressed = true } = {}) {
   const input = fs.createReadStream(file);
-  const stream = input.pipe(createGunzip());
-  input.on('error', (error) => stream.destroy(error));
+  const stream = compressed ? input.pipe(createGunzip()) : input;
+  if (compressed) input.on('error', (error) => stream.destroy(error));
   let buffer = Buffer.alloc(0), remaining = 0, bytes = 0, entries = 0, ended = false;
   const names = new Set();
   try {
@@ -120,7 +120,7 @@ export async function downloadFile(url, destination, expected, progress = () => 
       signal: AbortSignal.timeout(15 * 60000) }, resolve);
     request.on('error', reject);
   });
-  if (![200, 206].includes(response.statusCode)) { response.destroy(); throw new Error('Checkpoint download failed.'); }
+  if (![200, 206].includes(response.statusCode)) { response.destroy(); throw Object.assign(new Error('Checkpoint download failed.'), { statusCode: response.statusCode }); }
   const resumed = response.statusCode === 206 && offset > 0;
   if (response.statusCode === 206 && (!resumed || !String(response.headers['content-range'] || '').startsWith(`bytes ${offset}-`))) {
     response.destroy(); throw new Error('Invalid checkpoint download range.');
@@ -153,13 +153,42 @@ export async function fetchCheckpoint(trust, directory, progress = () => {}) {
   let raw = '';
   for await (const chunk of response.body) { raw += Buffer.from(chunk).toString(); if (Buffer.byteLength(raw) > 65536) throw new Error('Checkpoint manifest is too large.'); }
   const envelope = JSON.parse(raw), manifest = verifyManifest(envelope, trust);
+  // A source node can publish an immutable manifest as well as latest.json.
+  const artifactBase = url.pathname.endsWith('/manifest.json') ? new URL('../', url) : url;
   const cache = path.join(directory, crypto.createHash('sha256').update(canonical(manifest)).digest('hex'));
   fs.mkdirSync(cache, { recursive: true, mode: 0o700 });
+  let index;
+  if (manifest.incremental) {
+    const file = path.join(cache, 'index.json'), expected = manifest.incremental.index;
+    try {
+      if (!await matchesFile(file, expected)) await downloadFile(new URL(`${manifest.id}/index.json`, artifactBase), file, expected);
+      index = await readArchiveIndex(file, expected, manifest.files);
+    } catch (error) { if (error.statusCode !== 404) throw error; }
+  }
+  if (index) fs.mkdirSync(path.join(directory, 'objects'), { recursive: true, mode: 0o700 });
   for (const name of artifacts) {
-    const fileURL = new URL(`${manifest.id}/${name}`, url);
+    const fileURL = new URL(`${manifest.id}/${name}`, artifactBase);
     if (fileURL.origin !== url.origin || !/^[a-zA-Z0-9-]{1,100}$/.test(manifest.id)) throw new Error('Invalid checkpoint artifact location.');
     const file = path.join(cache, name), expected = manifest.files[name];
-    if (!fs.existsSync(file) || fs.statSync(file).size !== expected.bytes || await fileHash(file) !== expected.sha256) await downloadFile(fileURL, file, expected, (received, total) => progress({ phase: 'downloading', file: name, downloadedBytes: received, totalBytes: total, height: manifest.height }));
+    if (await matchesFile(file, expected)) continue;
+    const report = (received, total) => progress({ phase: 'downloading', file: name, downloadedBytes: received, totalBytes: total, height: manifest.height });
+    if (index?.archives[name]) {
+      try {
+        const missing = new Map();
+        for (const chunk of index.archives[name]) if (!await matchesFile(objectFile(directory, chunk.sha256), chunk)) missing.set(chunk.sha256, chunk);
+        const total = [...missing.values()].reduce((sum, chunk) => sum + chunk.bytes, 0);
+        let downloaded = 0;
+        report(0, total);
+        for (const chunk of missing.values()) {
+          await downloadFile(new URL(`objects/${chunk.sha256}.gz`, artifactBase), objectFile(directory, chunk.sha256), chunk, received => report(downloaded + received, total));
+          downloaded += chunk.bytes;
+        }
+        await assembleArchive(index.archives[name], directory, file);
+        if (!await matchesFile(file, expected)) { fs.rmSync(file, { force: true }); throw new Error('Reconstructed checkpoint archive integrity check failed.'); }
+        continue;
+      } catch (error) { if (error.statusCode !== 404) throw error; }
+    }
+    await downloadFile(fileURL, file, expected, report);
   }
   progress({ phase: 'verifying', height: manifest.height });
   await verifyArchive(path.join(cache, 'mpt.tar.gz'), 'mpt');
