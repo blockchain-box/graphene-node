@@ -51,7 +51,9 @@ export interface TokenHolder {
 }
 
 export interface TokenInfo {
+  /** Legacy policy metadata; it grants no minting authority. */
   mintPolicy?: MintPolicy;
+  mintable?: boolean;
   name?: string;
   creator?: string;
   creationNonce?: string;
@@ -426,6 +428,8 @@ export interface GovernanceConfig {
   approvalBps: number;
   maxActiveProposals: number;
   walletVoteCap: string;
+  attestSchemaFee: string;
+  attestationFee: string;
   baseFee: string;
   minFee: string;
   maxFee: string;
@@ -442,7 +446,10 @@ export interface MintPolicy {
   mintedInPeriod?: string;
 }
 export type GovernanceChange =
-  | { parameter: 'mintPolicy'; token: string; mintPolicy: MintPolicy }
+  | { parameter: 'feeAccountBurn'; asset?: string; value: string } // exact base units or ALL at execution
+  | { parameter: 'feeAccountTransfer'; asset?: string; value: string; recipient: string }
+  | { parameter: 'tokenMint'; token: string; recipient: string; amount: string }
+  | { parameter: 'tokenMarked'; token: string; value: 'true' | 'false' }
   | { parameter: keyof GovernanceConfig | 'tokenCreationFee'; value: string };
 export type GovernanceProposalCommand = GovernanceChange & { title: string; description: string };
 export interface GovernanceVote {
@@ -469,6 +476,7 @@ export interface GovernanceProposal {
   deposit: string;
   depositSettled: boolean;
   executionError?: string;
+  executedAmount?: string;
 }
 export interface GovernanceMintRequest {
   id: string;

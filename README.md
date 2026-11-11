@@ -1754,4 +1754,4 @@ locations can be configured with `GRAPHENE_DHT_BOOTSTRAP` and
 
 ## Governance upgrade
 
-Validator and sentry Compose services forward `GOVERNANCE_ACTIVATION_HEIGHT` (default `0`, disabled). Set the same future positive height on every validator and retain it for replay. The upgrade seeds account holding histories, so voting requires a holding-period warmup. See [governance activation and API documentation](../graphene-quarkus/docs/GOVERNANCE.md) for defaults and usage.
+Governance and transaction fees are active from blockchain startup. Validator and sentry services have no governance activation-height setting. Voting uses committed native balances without a holding-period warmup. See [governance and API documentation](../graphene-quarkus/docs/GOVERNANCE.md) for defaults and usage.
