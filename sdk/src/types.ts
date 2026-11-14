@@ -471,8 +471,9 @@ export interface GovernanceProposal {
   votingEnds: number;
   executeAfter: number;
   eligiblePower: string;
-  eligibleBalances: Record<string, string>;
-  votes: Record<string, GovernanceVote>;
+  voteCount: number;
+  yesPower: string;
+  noPower: string;
   deposit: string;
   depositSettled: boolean;
   executionError?: string;

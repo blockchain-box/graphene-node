@@ -35,3 +35,9 @@ it('encodes governance mint proposals with exact amount and destination', () => 
     amount: '100000000000000000001', title: 'Mint by community vote', description: '' };
   assert.deepEqual(JSON.parse(governanceArguments('propose', change)[1]), change);
 });
+
+it('encodes a voter claim using only its proposal id', () => {
+  const [operation, payload] = governanceArguments('claim', { id: '0xabc' });
+  assert.equal(operation, 'claim');
+  assert.deepEqual(JSON.parse(payload), { id: '0xabc' });
+});

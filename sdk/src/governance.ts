@@ -15,6 +15,7 @@ export type GovernanceOperation = {
   propose: GovernanceProposalCommand;
   start: { id: string };
   vote: { id: string; amount: string; support: boolean };
+  claim: { id: string };
   createToken: ControlledTokenCommand;
 };
 /** Pass these arguments to governance() using an ABI encoder such as ethers Interface. Set tx.value to zero. */

@@ -45,7 +45,9 @@ interface TokenHolder {
     balance: string;
 }
 interface TokenInfo {
+    /** Legacy policy metadata; it grants no minting authority. */
     mintPolicy?: MintPolicy;
+    mintable?: boolean;
     name?: string;
     creator?: string;
     creationNonce?: string;
@@ -375,6 +377,8 @@ interface GovernanceConfig {
     approvalBps: number;
     maxActiveProposals: number;
     walletVoteCap: string;
+    attestSchemaFee: string;
+    attestationFee: string;
     baseFee: string;
     minFee: string;
     maxFee: string;
@@ -391,9 +395,23 @@ interface MintPolicy {
     mintedInPeriod?: string;
 }
 type GovernanceChange = {
-    parameter: 'mintPolicy';
+    parameter: 'feeAccountBurn';
+    asset?: string;
+    value: string;
+} | {
+    parameter: 'feeAccountTransfer';
+    asset?: string;
+    value: string;
+    recipient: string;
+} | {
+    parameter: 'tokenMint';
     token: string;
-    mintPolicy: MintPolicy;
+    recipient: string;
+    amount: string;
+} | {
+    parameter: 'tokenMarked';
+    token: string;
+    value: 'true' | 'false';
 } | {
     parameter: keyof GovernanceConfig | 'tokenCreationFee';
     value: string;
@@ -421,11 +439,13 @@ interface GovernanceProposal {
     votingEnds: number;
     executeAfter: number;
     eligiblePower: string;
-    eligibleBalances: Record<string, string>;
-    votes: Record<string, GovernanceVote>;
+    voteCount: number;
+    yesPower: string;
+    noPower: string;
     deposit: string;
     depositSettled: boolean;
     executionError?: string;
+    executedAmount?: string;
 }
 interface GovernanceMintRequest {
     id: string;
@@ -619,7 +639,7 @@ interface ControlledTokenCommand {
     decimals: number;
     initialSupply: string;
     logoURI?: string;
-    mintPolicy: MintPolicy;
+    mintable: true;
 }
 type GovernanceOperation = {
     draft: GovernanceProposalCommand;
@@ -632,15 +652,10 @@ type GovernanceOperation = {
         amount: string;
         support: boolean;
     };
-    createToken: ControlledTokenCommand;
-    requestMint: {
-        token: string;
-        recipient: string;
-        amount: string;
-    };
-    approveMint: {
+    claim: {
         id: string;
     };
+    createToken: ControlledTokenCommand;
 };
 /** Pass these arguments to governance() using an ABI encoder such as ethers Interface. Set tx.value to zero. */
 declare function governanceArguments<K extends keyof GovernanceOperation>(operation: K, command: GovernanceOperation[K]): [K, string];
