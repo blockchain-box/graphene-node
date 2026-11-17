@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" href="/graphene-logo.png" />
+    <title>Graphene · Node console</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div id="gate" class="gate">
+      <section class="surface">
+        <img src="/graphene-logo.png" alt="" width="48" />
+        <p class="eyebrow">Local workspace</p>
+        <h1>Open your node console</h1>
+        <p>
+          Run the launcher on your node host, then open the private link printed
+          in your terminal.
+        </p>
+        <code>npm start</code>
+        <p id="gate-error" role="alert"></p>
+      </section>
+    </div>
+    <div id="shell" hidden>
+      <button id="scrim" aria-label="Close navigation" hidden></button>
+      <aside id="sidebar">
+        <a class="brand" href="?page=overview" data-page="overview"
+          ><img src="/graphene-logo.png" alt="" /><span
+            ><strong>Graphene</strong><small>Node console</small></span
+          ></a
+        >
+        <div class="workspace">
+          <label class="eyebrow" for="network">Workspace</label
+          ><select id="network"></select>
+        </div>
+        <nav aria-label="Main navigation" id="nav"></nav>
+        <footer>
+          <div class="local-panel">
+            <strong><i class="dot"></i> Local control plane</strong
+            ><small
+              >Node identities and signing history stay on this machine.</small
+            >
+          </div>
+          <div class="footline">
+            <span><i class="dot"></i>127.0.0.1</span
+            ><button id="theme" class="icon" aria-label="Switch theme">
+              ☀
+            </button>
+          </div>
+        </footer>
+      </aside>
+      <div class="workspace-body">
+        <header>
+          <div>
+            <button
+              id="menu"
+              class="icon"
+              aria-expanded="false"
+              aria-controls="sidebar"
+              aria-label="Open navigation"
+            >
+              ☰</button
+            ><span class="muted">Workspace</span><span class="divider">/</span
+            ><strong id="crumb"></strong>
+          </div>
+          <div>
+            <span id="stage" class="badge"></span
+            ><button id="refresh" class="icon" aria-label="Refresh dashboard">
+              <img class="glyph" src="/icons/refresh-cw.svg" alt="" />
+            </button>
+          </div>
+        </header>
+        <main>
+          <p class="eyebrow" id="category"></p>
+          <h1 id="title" tabindex="-1"></h1>
+          <p id="intro"></p>
+          <p id="feedback" role="status" hidden></p>
+          <div id="content"></div>
+        </main>
+      </div>
+    </div>
+    <dialog id="dialog" aria-labelledby="dialog-title">
+      <form id="form">
+        <div class="dialog-head">
+          <p class="eyebrow" id="dialog-category"></p>
+          <button
+            type="button"
+            id="close-dialog"
+            class="icon"
+            aria-label="Close dialog"
+          >
+            ×
+          </button>
+        </div>
+        <h2 id="dialog-title"></h2>
+        <div id="fields"></div>
+        <p id="form-error" role="alert"></p>
+        <div class="buttons">
+          <button type="button" id="cancel">Cancel</button
+          ><button class="primary" id="submit">Continue</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

@@ -134,6 +134,8 @@ services:
       dockerfile: docker/evm/Dockerfile
     container_name: ${COMPOSE_PROJECT_NAME:-sentry}_evm_app
     environment:
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5177,http://127.0.0.1:5177}"
+      MANIFEST_PUBLISHER_URL: http://manifest-publisher:8098
       QUARKUS_PROFILE: prod
       APP_EVM_DB_USER: ${APP_EVM_DB_USER}
       APP_EVM_DB_PASSWORD: ${APP_EVM_DB_PASSWORD}
@@ -186,6 +188,49 @@ services:
     restart: unless-stopped
     networks:
       - graphene-net
+
+  # Shared off-chain manifest hosting for every wallet connected to this node.
+  manifest-ipfs:
+    image: ipfs/kubo:v0.43.1
+    environment:
+      IPFS_PROFILE: server
+    volumes:
+      - manifest-ipfs-data:/data/ipfs
+    ports:
+      - "${IPFS_SWARM_PORT:-4001}:4001/tcp"
+      - "${IPFS_SWARM_PORT:-4001}:4001/udp"
+    healthcheck:
+      test: ["CMD", "ipfs", "--api=/ip4/127.0.0.1/tcp/5001", "id"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    networks:
+      - graphene-net
+
+  manifest-publisher:
+    build:
+      context: ../docker/manifest-publisher
+    environment:
+      MANIFEST_HOST: 0.0.0.0
+      IPFS_API_URL: http://manifest-ipfs:5001
+      MANIFEST_TRUST_PROXY: "true"
+    # No published HTTP or Kubo admin ports. app-evm is the public entry point.
+    depends_on:
+      manifest-ipfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8098/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    networks:
+      - graphene-net
+
+volumes:
+  # Durable even when the chain itself uses tmpfs.
+  manifest-ipfs-data:
 
 networks:
   graphene-net:

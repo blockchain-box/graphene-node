@@ -28,10 +28,12 @@
     "test:checkpoint": "node --test scripts/checkpoint.test.js scripts/checkpoint-cli.test.js scripts/checkpoint-incremental.test.js scripts/checkpoint-reset.test.js scripts/checkpoint-host.test.js scripts/launcher-checkpoints.test.js scripts/checkpoint-selection.test.js",
     "doctor": "node scripts/operator-doctor.js",
     "package:operator-kit": "python3 scripts/package-operator-kit.py",
-    "join": "GRAPHENE_P2P_SHARE=1 node scripts/join-network.js",
+    "join": "node participant/server.js",
     "test:join": "node --test scripts/join-network.test.js",
-    "package:explorer": "node scripts/package-explorer.js",
-    "join:sentry": "node scripts/join-sentry.js",
-    "test": "node --test scripts/*.test.js"
+    "join:sentry": "node participant/server.js --sentry",
+    "test": "node --test scripts/*.test.js",
+    "start": "node participant/server.js",
+    "join:legacy": "node scripts/join-network.js",
+    "join:sentry:legacy": "node scripts/join-sentry.js"
   }
 }

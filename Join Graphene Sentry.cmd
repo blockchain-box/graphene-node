@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-node scripts/join-sentry.js
+node participant/server.js --sentry
 pause

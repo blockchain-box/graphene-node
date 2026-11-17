@@ -18,36 +18,18 @@ OUTPUT = ROOT / 'dist/operator'
 
 def selected_files():
     files = [ROOT / name for name in [
-        'package.json', 'package-lock.json', '.dockerignore', 'README.md',
+        'package.json', 'package-lock.json', 'PARTICIPANTS.md',
         'Join Graphene.command', 'Join Graphene.cmd',
         'Join Graphene Sentry.command', 'Join Graphene Sentry.cmd',
-        'scripts/join-network.js',
-        'scripts/node-identity.js', 'scripts/node-manager.js', 'scripts/node-wallet.js',
-        'scripts/node-manager.html', 'scripts/node-manager-ui.js', 'scripts/node-diagnostics.js', 'scripts/node-monitor.js',
-        'scripts/node-guide.js', 'scripts/node-guide-ui.js',
-        'scripts/join-sentry.js', 'scripts/local-node-runtime.js',
-        'scripts/operator-doctor.js',
-        'scripts/update-cli.js',
-        'scripts/update-e2e.js',
-        'scripts/update-runtime.js',
-        'scripts/checkpoint-core.js', 'scripts/checkpoint-docker.js',
-        'scripts/checkpoint-storage.js', 'scripts/checkpoint-serving.js',
-        'scripts/checkpoint-trust.js', 'scripts/checkpoint-enroll.js',
-        'scripts/launcher-checkpoints.js', 'scripts/checkpoint-manager-ui.js',
+        'participant/server.js', 'participant/enrollment.js', 'participant/runtime.js', 'participant/validator-compose.json', 'participant/public-tendermint.conf',
+        'participant/ui/index.html', 'participant/ui/app.js', 'participant/ui/progress.js', 'participant/ui/styles.css', 'participant/ui/graphene-logo.png',
+        'agents/lib/validator-files.js', 'agents/lib/keystore.js', 'agents/lib/logger.js',
+        'agents/validator-agent/src/keygen.js', 'agents/validator-agent/src/utils.js',
+        'network/utils/package.json', 'network/utils/dist/index.js', 'network/utils/dist/index.cjs',
+        'scripts/launcher-icons/LICENSE', 'scripts/launcher-icons/LUCIDE_LICENSE',
     ]]
-    files += sorted((ROOT / 'scripts/launcher-icons').glob('*.svg'))
-    files += [ROOT / 'scripts/launcher-icons/LICENSE', ROOT / 'scripts/launcher-icons/LUCIDE_LICENSE', ROOT / 'scripts/launcher-assets/graphene-logo.png']
-    files += sorted((ROOT / 'agents/lib').glob('*.js'))
-    files += [ROOT / 'agents/lib/package.json']
-    for role in ['validator', 'sentry']:
-        base = ROOT / f'agents/{role}-agent'
-        files += [base / 'package.json', base / 'Dockerfile', base / 'docker/entrypoint.sh']
-        files += sorted((base / 'src').rglob('*.js'))
-    for package in ['net', 'utils', 'server', 'client']:
-        base = ROOT / 'network' / package
-        files += [base / 'package.json', base / 'dist/index.js', base / 'dist/index.cjs']
-        files += sorted((base / 'dist').glob('*.d.ts'))
-        files += sorted((base / 'dist').glob('*.d.cts'))
+    files += [ROOT / 'scripts/launcher-icons' / (name + '.svg') for name in
+              ['home','network','server','shield-check','layers','refresh-cw']]
     for file in files:
         if not file.is_file() or file.is_symlink() or not file.resolve().is_relative_to(ROOT):
             raise ValueError(f'Missing or unsafe kit input: {file.relative_to(ROOT)}')
@@ -62,10 +44,13 @@ def main():
             target = staging / source.relative_to(ROOT)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+        shutil.copy2(staging/'PARTICIPANTS.md', staging/'README.md')
         package_file = staging / 'package.json'
         package = json.loads(package_file.read_text())
         package['scripts'] = {key: value for key, value in package['scripts'].items()
-                              if key in ['join', 'join:sentry', 'doctor', 'update', 'test:update:e2e', 'checkpoint:enroll']}
+                              if key in ['start', 'join', 'join:sentry']}
+        package['dependencies'] = {k:v for k,v in package['dependencies'].items()
+                                   if k in ['@grph-net/utils', 'ethers', 'tweetnacl', 'z32']}
         package_file.write_text(json.dumps(package, indent=2) + '\n')
         # Refresh the staged lockfile for the kit's reduced package manifest.
         # Never run dependency lifecycle scripts while packaging.
@@ -77,8 +62,8 @@ def main():
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
         dirty = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT))
         manifest = {
-            'formatVersion': 1, 'channel': 'development-source', 'nodeMajor': 24,
-            'chainId': 9876, 'sourceCommit': commit, 'workingTreeChanges': dirty,
+            'formatVersion': 1, 'channel': 'participant-source', 'nodeMajor': 24,
+            'networkSource': 'deployment-invitation', 'sourceCommit': commit, 'workingTreeChanges': dirty,
             'signedInstaller': False, 'hostedProvisioning': False,
             'files': {str(p.relative_to(staging)): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in sorted(staging.rglob('*')) if p.is_file()},
@@ -94,7 +79,7 @@ def main():
                     info.external_attr = (stat.S_IFREG | (file.stat().st_mode & 0o777)) << 16
                     zipped.writestr(info, file.read_bytes())
         temporary_archive.replace(archive)
-        shutil.copy2(ROOT / 'README.md', OUTPUT / 'graphene-operator-guide.md')
+        shutil.copy2(ROOT / 'PARTICIPANTS.md', OUTPUT / 'graphene-operator-guide.md')
         (OUTPUT / 'operator-kit.json').write_text(json.dumps({k: v for k, v in manifest.items() if k != 'files'}, indent=2) + '\n')
         checksums = []
         for filename in ['graphene-operator-kit.zip', 'graphene-operator-guide.md', 'operator-kit.json']:

@@ -24,12 +24,12 @@ export function renderReference(markdown) {
 
 export function renderNodeGuide({ role = 'validator', hosted = false } = {}) {
  role = role === 'sentry' ? 'sentry' : 'validator';
- const sentry = role === 'sentry', launch = sentry ? 'npm run join:sentry' : 'npm run join';
+ const sentry = role === 'sentry', launch = sentry ? 'npm run join:sentry:legacy' : 'npm run join:legacy';
  const location = hosted ? 'server' : 'local';
  const manager = `/?role=${role}&location=${location}`;
- const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+ const readme = fs.readFileSync(new URL('../LEGACY-MAINTENANCE.md', import.meta.url), 'utf8');
  const guide = readme.split('\n## Graphene operator guide\n')[1];
- if (!guide) throw new Error('README.md is missing the operator guide');
+ if (!guide) throw new Error('LEGACY-MAINTENANCE.md is missing the operator guide');
  const reference = '# Graphene operator guide\n' + guide.split('\n## ')[0].replace(/^###/gm, '##');
  const style = fs.readFileSync(new URL('./node-manager.html', import.meta.url), 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1];
  const steps = [['install','1. Check your tools'],['wallet-nodes','Find existing wallet nodes'],['hardware','Hardware requirements'],['identity','2. Prepare your node'],['registration','3. Register'],['fund-agent','4. Fund agent'],['connections','5. Connect'],['pair-start','6. Start your node'],['operate','7. Check progress'],['checkpoint-setup','Fresh node checkpoints'],['node-agents','About node agents'],['checkpoint-export','Provider reference'],['help','Help & recovery']];

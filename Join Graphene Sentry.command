@@ -5,5 +5,5 @@ if ! command -v node >/dev/null; then
   read -r -p "Press Enter to close."
   exit 1
 fi
-node scripts/join-sentry.js
+node participant/server.js --sentry
 read -r -p "Press Enter to close."

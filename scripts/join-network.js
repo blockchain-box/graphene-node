@@ -51,7 +51,7 @@ export function createSetupServer({ directory, token = crypto.randomBytes(32).to
       try{const root=fs.realpathSync(new URL('./launcher-icons/',import.meta.url)),file=fs.realpathSync(new URL('./launcher-icons/'+icon[1],import.meta.url));if(!file.startsWith(root+path.sep)||!fs.statSync(file).isFile())return reply(404,{error:'Icon not found'});res.writeHead(200,{'Content-Type':'image/svg+xml; charset=utf-8'});return res.end(fs.readFileSync(file));}catch{return reply(404,{error:'Icon not found'});}
     }
     if(pageUrl.pathname==='/launcher-assets/graphene-logo.png'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'image/png'});return res.end(fs.readFileSync(new URL('./launcher-assets/graphene-logo.png',import.meta.url)));}
-    const publicFiles = { '/manager-ui.js': './node-manager-ui.js', '/checkpoint-manager-ui.js': './checkpoint-manager-ui.js', '/guide-ui.js': './node-guide-ui.js', '/operator-guide.md': '../README.md' };
+    const publicFiles = { '/manager-ui.js': './node-manager-ui.js', '/checkpoint-manager-ui.js': './checkpoint-manager-ui.js', '/guide-ui.js': './node-guide-ui.js', '/operator-guide.md': '../LEGACY-MAINTENANCE.md' };
     if (Object.hasOwn(publicFiles, pageUrl.pathname) && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': pageUrl.pathname.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/markdown; charset=utf-8' });
       return res.end(fs.readFileSync(new URL(publicFiles[pageUrl.pathname], import.meta.url)));

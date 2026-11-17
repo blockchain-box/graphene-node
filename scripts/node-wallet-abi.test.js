@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { Interface } from 'ethers';
 import { prepareWalletAction } from './node-wallet.js';
-const abi=new Interface(JSON.parse(fs.readFileSync(new URL('../../graphene-quarkus/base/src/main/resources/META-INF/abi/v0/abi.json',import.meta.url),'utf8')));
+const abi=new Interface(JSON.parse(fs.readFileSync(new URL('./fixtures/node-wallet-abi.json',import.meta.url),'utf8')));
 const wallet='0x'+'1'.repeat(40);
 const validator={role:'validator',agentAddress:wallet,name:'Node',nodeId:'a'.repeat(40),consensusPublicKey:Buffer.alloc(32).toString('base64'),encryptionPublicKey:'b'.repeat(64)};
 const sentry={...validator,role:'sentry',p2pHost:'sentry.example.com',p2pPort:26656};

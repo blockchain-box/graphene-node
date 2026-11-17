@@ -56,7 +56,7 @@ test('downtime panel distinguishes participation penalties from a GRPH stake ded
 });
 test('Stop refreshes chain data and shows downtime impact before confirmation without stopping on cancel',async()=>{
  const ui=dashboard('running');
- ui.run(`globalThis.calls=[];globalThis.confirmText='';globalThis.confirm=message=>{confirmText=message;return false;};api=async(...args)=>{calls.push(args);return {registration:{registered:true},ownerMatches:true,exit:{safeToStop:false},downtime:{status:'ready',score:'900000000000000000',projections:[{score:'891089108910891089',missedBlocks:'1',weightReductionWei:'1'}],missedBlocks:'10',observedBlocks:'100',effectiveWeightWei:'100'}};};operate=async action=>calls.push(action);`);
+ ui.run(`globalThis.calls=[];globalThis.confirmText='';confirmLauncherAction=async message=>{confirmText=message;return false;};api=async(...args)=>{calls.push(args);return {registration:{registered:true},ownerMatches:true,exit:{safeToStop:false},downtime:{status:'ready',score:'900000000000000000',projections:[{score:'891089108910891089',missedBlocks:'1',weightReductionWei:'1'}],missedBlocks:'10',observedBlocks:'100',effectiveWeightWei:'100'}};};operate=async action=>calls.push(action);`);
  await ui.run('stopSelectedNode()');
  assert.equal(ui.run('calls.length'),1);assert.equal(ui.run('calls[0][1]'),'GET');
  assert.match(ui.run('confirmText'),/90.00%/);assert.match(ui.run('confirmText'),/Stopping is blocked/);assert.match(ui.run('confirmText'),/0 GRPH/);

@@ -17,15 +17,15 @@ test('wallet mismatch offers deletion only for a saved validator and disables un
  d.run('rows[0].chainOnly=true;rows[0].ownerWallet="owner";chainState.identityMatches=false;renderChain()');assert.doesNotMatch(d.element('chain-panel').innerHTML,/id="delete-node"/);
 });
 test('delete confirmation targets the saved node host and removes the entry after success',async()=>{
- const d=ui();d.run(`globalThis.calls=[];globalThis.confirm=()=>false;api=async(...args)=>{calls.push(args);return {removed:true};};load=async()=>{};closeNodeDetail=()=>{selected=null;};`);
+ const d=ui();d.run(`globalThis.calls=[];confirmLauncherAction=async()=>false;api=async(...args)=>{calls.push(args);return {removed:true};};load=async()=>{};closeNodeDetail=()=>{selected=null;};`);
  await d.run('deleteSelectedNode()');assert.equal(d.run('calls.length'),0);
- d.run('confirm=()=>true');await d.run('deleteSelectedNode()');assert.equal(d.run('calls[0][0]'),'/nodes/mistake/remove');assert.equal(d.run('calls[0][3]'),'remote');assert.equal(d.run('rows.length'),0);assert.match(d.element('activity').textContent,/retained/);
+ d.run('confirmLauncherAction=async()=>true');await d.run('deleteSelectedNode()');assert.equal(d.run('calls[0][0]'),'/nodes/mistake/remove');assert.equal(d.run('calls[0][3]'),'remote');assert.equal(d.run('rows.length'),0);assert.match(d.element('activity').textContent,/retained/);
 });
 
 
 test('checkpoint reset confirmation targets selected host with an explicit recovery request',async()=>{
- const d=ui();d.run(`globalThis.calls=[];globalThis.confirm=()=>false;api=async(...args)=>{calls.push(args);return {accepted:true};};load=async()=>{};renderDetail();`);
+ const d=ui();d.run(`globalThis.calls=[];confirmLauncherAction=async()=>false;api=async(...args)=>{calls.push(args);return {accepted:true};};load=async()=>{};renderDetail();`);
  d.element('reset-node').onclick();await new Promise(r=>setImmediate(r));assert.equal(d.run('calls.length'),0);
- d.run('confirm=()=>true');d.element('reset-node').onclick();await new Promise(r=>setImmediate(r));
+ d.run('confirmLauncherAction=async()=>true');d.element('reset-node').onclick();await new Promise(r=>setImmediate(r));
  assert.equal(d.run('calls[0][0]'),'/nodes/mistake/reset');assert.equal(d.run('calls[0][2].confirmReset'),true);assert.equal(d.run('calls[0][3]'),'remote');
 });

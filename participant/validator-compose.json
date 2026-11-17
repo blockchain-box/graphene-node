@@ -1,0 +1,204 @@
+{
+  "name": "graphene-dev",
+  "services": {
+    "abci-db": {
+      "restart": "unless-stopped",
+      "networks": [
+        "backend"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      },
+      "image": "postgres",
+      "environment": {
+        "GRAPHENE_DB_ROLE": "abci",
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "${ABCI_ADMIN_PASSWORD}",
+        "POSTGRES_DB": "grapheneDB",
+        "APP_ABCI_DB_USER": "abci_user",
+        "APP_ABCI_DB_PASSWORD": "${ABCI_DB_PASSWORD}",
+        "APP_ABCI_DB_SCHEMA": "abci_schema"
+      },
+      "volumes": [
+        "./data/abci-postgres:/var/lib/postgresql"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "pg_isready",
+          "-U",
+          "postgres",
+          "-d",
+          "grapheneDB"
+        ],
+        "interval": "5s",
+        "timeout": "5s",
+        "retries": 60,
+        "start_period": "30s"
+      }
+    },
+    "mpt": {
+      "restart": "unless-stopped",
+      "networks": [
+        "backend"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      },
+      "image": "mpt",
+      "environment": {
+        "MPT_DB_API_TOKEN": "${MPT_DB_API_TOKEN}",
+        "MPT_DB_DATA_DIR": "/data/db"
+      },
+      "volumes": [
+        "./data/mpt:/data"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:3000/graphene-mpt/health/ready | grep -q UP"
+        ],
+        "interval": "5s",
+        "timeout": "5s",
+        "retries": 60,
+        "start_period": "30s"
+      }
+    },
+    "abci": {
+      "restart": "unless-stopped",
+      "networks": [
+        "backend"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      },
+      "image": "abci",
+      "environment": {
+        "QUARKUS_PROFILE": "prod",
+        "CHAIN_ID": "1",
+        "TENDERMINT_HOST": "node",
+        "MPT_DB_HOST": "mpt",
+        "MPT_DB_API_TOKEN": "${MPT_DB_API_TOKEN}",
+        "GENESIS_STAGE": "dev",
+        "GENESIS_INIT_CHAIN_OVERRIDE_VALIDATORS": "true",
+        "POSTGRESSQL_DB_HOST": "abci-db",
+        "APP_ABCI_DB_USER": "abci_user",
+        "APP_ABCI_DB_PASSWORD": "${ABCI_DB_PASSWORD}",
+        "APP_ABCI_DB_SCHEMA": "abci_schema"
+      },
+      "depends_on": {
+        "abci-db": {
+          "condition": "service_healthy"
+        },
+        "mpt": {
+          "condition": "service_healthy"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:3002/graphene-abci/health/ready | grep -q UP"
+        ],
+        "interval": "5s",
+        "timeout": "5s",
+        "retries": 60,
+        "start_period": "30s"
+      }
+    },
+    "node": {
+      "restart": "unless-stopped",
+      "networks": [
+        "backend"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      },
+      "image": "tendermint",
+      "entrypoint": [
+        "tendermint"
+      ],
+      "command": [
+        "node",
+        "--home",
+        "/tendermint",
+        "--proxy_app",
+        "tcp://abci:26658",
+        "--rpc.laddr",
+        "tcp://0.0.0.0:26657",
+        "--p2p.pex=false",
+        "--p2p.seeds=",
+        "--log_level",
+        "error"
+      ],
+      "volumes": [
+        "./identity/tendermint:/tendermint"
+      ],
+      "depends_on": {
+        "abci": {
+          "condition": "service_healthy"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:26657/status | grep -Eq '\"latest_block_height\"[[:space:]]*:[[:space:]]*\"[1-9][0-9]*\"'"
+        ],
+        "interval": "5s",
+        "timeout": "5s",
+        "retries": 60,
+        "start_period": "30s"
+      }
+    },
+    "home-tunnel": {
+      "restart": "unless-stopped",
+      "networks": [
+        "backend",
+        "egress"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      },
+      "image": "transport",
+      "command": [
+        "server",
+        "/app/p2p/identity.json",
+        "/app/p2p/policy.json"
+      ],
+      "volumes": [
+        "./identity/tunnel.json:/app/p2p/identity.json:ro",
+        "./tunnel-policy.json:/app/p2p/policy.json:ro"
+      ],
+      "depends_on": {
+        "node": {
+          "condition": "service_started"
+        }
+      }
+    }
+  },
+  "networks": {
+    "backend": {
+      "internal": true
+    },
+    "egress": {}
+  }
+}
