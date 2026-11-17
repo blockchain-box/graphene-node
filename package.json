@@ -1,39 +1,21 @@
 {
-  "name": "graphene-node-deps",
+  "name": "graphene-node",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "dependencies": {
-    "@grph-net/net": "file:./network/net",
-    "@grph-net/server": "file:./network/server",
-    "@grph-net/utils": "file:./network/utils",
-    "b4a": "^1.7.3",
-    "hypercore-crypto": "^3.6.1",
-    "hyperdht": "^6.27.0",
-    "sodium-universal": "^5.0.1",
-    "z32": "^1.1.0",
-    "ethers": "^6.13.0",
-    "tweetnacl": "^1.0.3",
-    "tweetnacl-util": "^0.15.1",
-    "commander": "^12.1.0",
-    "ws": "^8.18.0",
-    "@grph-net/client": "file:./network/client"
-  },
   "scripts": {
-    "update": "node scripts/update-cli.js",
-    "test:update:e2e": "node scripts/update-e2e.js",
-    "checkpoint": "node scripts/checkpoint-cli.js",
-    "checkpoint:host": "node scripts/checkpoint-host.js",
-    "checkpoint:enroll": "node scripts/checkpoint-enroll.js",
-    "test:checkpoint": "node --test scripts/checkpoint.test.js scripts/checkpoint-cli.test.js scripts/checkpoint-incremental.test.js scripts/checkpoint-reset.test.js scripts/checkpoint-host.test.js scripts/launcher-checkpoints.test.js scripts/checkpoint-selection.test.js",
-    "doctor": "node scripts/operator-doctor.js",
-    "package:operator-kit": "python3 scripts/package-operator-kit.py",
-    "join": "node participant/server.js",
-    "test:join": "node --test scripts/join-network.test.js",
-    "join:sentry": "node participant/server.js --sentry",
-    "test": "node --test scripts/*.test.js",
     "start": "node participant/server.js",
-    "join:legacy": "node scripts/join-network.js",
-    "join:sentry:legacy": "node scripts/join-sentry.js"
+    "test": "node --test scripts/*.test.js",
+    "package:operator-kit": "python3 scripts/package-operator-kit.py"
+  },
+  "dependencies": {
+    "@grph-net/utils": "file:./network/utils",
+    "ethers": "6.17.0",
+    "tweetnacl": "1.0.3",
+    "z32": "1.1.0"
+  },
+  "description": "Browser console for running and managing Graphene validator and sentry nodes",
+  "engines": {
+    "node": ">=24"
   }
 }

@@ -1,8 +1,0 @@
-{
-  "name": "@grph/agent-lib",
-  "version": "1.0.0",
-  "description": "Shared utilities for Graphene agents",
-  "private": true,
-  "type": "module",
-  "main": "index.js"
-}

@@ -7,7 +7,7 @@ npm ci
 npm start
 ```
 
-Open the complete private loopback link printed in the terminal. `npm run join` opens the same console; `npm run join:sentry` opens sentry deployment. The kit includes its runtime, identity and checkpoint helpers; no sibling workspace folder or network controller installation is required. Repeating `npm run join` reopens the authenticated console already running for that data directory. If an unrelated application occupies the default port, use `SETUP_PORT=0 npm run join` to select an available port automatically.
+Open the complete private loopback link printed in the terminal. Select **Validator deployments** or **Sentry deployments** in the sidebar. The kit includes its runtime, identity and checkpoint helpers; no sibling workspace folder or network controller installation is required. Repeating `npm start` reopens the authenticated console already running for that data directory. If an unrelated application occupies the default port, use `SETUP_PORT=0 npm start` to select an available port automatically.
 
 The console adapts grph-deployment's guided deployment process for participants: **Configuration → Network & identity → Checkpoint & install → Services & endpoints**. Overview, Networks, Validator deployments, Sentry deployments, Network monitor, Activity & logs and Settings cover joining and operating your own nodes. It does not create genesis, change the blockchain release, update existing nodes, or deploy application frontends.
 

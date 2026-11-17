@@ -4,9 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node participant/server.js",
-    "join": "node participant/server.js",
-    "join:sentry": "node participant/server.js --sentry"
+    "start": "node participant/server.js"
   },
   "dependencies": {
     "@grph-net/utils": "file:./network/utils",

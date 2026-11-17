@@ -32,11 +32,10 @@ def main():
             target = staging / source.relative_to(ROOT)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
-        shutil.copy2(staging/'PARTICIPANTS.md', staging/'README.md')
         package_file = staging / 'package.json'
         package = json.loads(package_file.read_text())
         package['scripts'] = {key: value for key, value in package['scripts'].items()
-                              if key in ['start', 'join', 'join:sentry']}
+                              if key == 'start'}
         package['dependencies'] = {k:v for k,v in package['dependencies'].items()
                                    if k in ['@grph-net/utils', 'ethers', 'tweetnacl', 'z32']}
         package_file.write_text(json.dumps(package, indent=2) + '\n')

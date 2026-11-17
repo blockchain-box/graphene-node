@@ -82,7 +82,7 @@ export function createConsole(
         const file = asset
           ? new URL("./ui/" + asset[0], import.meta.url)
           : new URL(
-              "../scripts/launcher-icons/" + icon[1] + ".svg",
+              "./ui/icons/" + icon[1] + ".svg",
               import.meta.url,
             );
         res.writeHead(200, {
@@ -412,7 +412,7 @@ async function launchConsole() {
       e.code === "EADDRINUSE"
         ? "Console port " +
             port +
-            " is in use by another process or an older launcher. Stop that console, or choose another port: SETUP_PORT=8788 npm run join"
+            " is in use by another process or an older launcher. Stop that console, or choose another port: SETUP_PORT=8788 npm start"
         : e.message,
     );
     process.exitCode = 1;

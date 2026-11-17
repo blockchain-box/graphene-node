@@ -66,21 +66,25 @@ test("imports by fingerprint, persists bindings and prepares an independent nonv
   assert.ok(compose.services.node.command.includes(invite.peer));
   assert.equal(compose.services.node.ports.length, 1);
   assert.notEqual(node.identity.node_id, invite.peer.split("@")[0]);
+  await assert.rejects(manager.operate(id, "sentry", "start"), /Review the current deployment/);
+  manager.reviewDeployment(id, "sentry");
   await manager.operate(id, "sentry", "start");
   assert.deepEqual(calls[0].args, ["up", "-d"]);
   assert.throws(() => manager.prepareSentry(id, "192.0.2.2"), /already/);
   fs.writeFileSync(path.join(dir, ".rollout-fence.json"), "{}");
   await assert.rejects(manager.operate(id, "sentry", "start"), /fenced/);
 });
-test("a local sentry can join outbound without publishing peer or RPC ports to the network", (t) => {
+test("a sentry requires a public address and publishes both peer and read-only RPC endpoints", (t) => {
   const { manager, raw, id } = fixture(t);
   manager.import(raw, sha(raw));
-  manager.prepareSentry(id, "");
+  assert.throws(() => manager.prepareSentry(id, ""), /public IPv4 address or DNS hostname/);
+  manager.prepareSentry(id, "sentry.example.org");
   const file = path.join(manager.dir(id, "sentry"), "compose.json");
   const { node, gateway } = JSON.parse(fs.readFileSync(file)).services;
-  assert.equal(node.ports, undefined);
-  assert.equal(node.command.includes("--p2p.external-address"), false);
-  assert.deepEqual(gateway.ports, ["127.0.0.1::26657"]);
+  assert.deepEqual(node.ports, ["26656:26656"]);
+  assert.ok(node.command.includes("--p2p.external-address"));
+  assert.ok(node.command.includes("sentry.example.org:26656"));
+  assert.deepEqual(gateway.ports, ["26657:26657"]);
 });
 test("admitted validator handoff preserves keys, rejects genesis bundles and foreign images, and returns the controller receipt", async (t) => {
   const { manager, raw, invite, id, root } = fixture(t);
@@ -125,11 +129,13 @@ test("admitted validator handoff preserves keys, rejects genesis bundles and for
   assert.throws(() => manager.prepareValidator(id,bundle),/tunnel policy/);
   write("tunnel-policy.json",invite.tunnelPolicy);
   manager.prepareValidator(id, bundle);
+  await assert.rejects(manager.operate(id, "validator", "start"), /Review the current deployment/);
+  manager.reviewDeployment(id, "validator");
   await manager.operate(id, "validator", "start");
   assert.deepEqual(before, fs.readFileSync(file));
   assert.equal(
     manager.inventory()[0].nodes[0].receipt.compose_sha256,
-    sha(fs.readFileSync(path.join(bundle, "compose.json"))),
+    sha(fs.readFileSync(path.join(dir, "compose.json"))),
   );
   fs.unlinkSync(
     path.join(dir, "identity/tendermint/data/priv_validator_state.json"),
@@ -203,7 +209,7 @@ test("enrollment builds the deployed ABI for the matching owner and chain and re
 });
 
 test("health distinguishes an isolated node from a live connection to its invited primary",async t=>{
-  const {manager,root,raw,id,invite}=fixture(t); manager.import(raw,sha(raw)); manager.prepareSentry(id);
+  const {manager,root,raw,id,invite}=fixture(t); manager.import(raw,sha(raw)); manager.prepareSentry(id, "sentry.example.org");
   const me=manager.inventory()[0].nodes[0].identity.node_id;
   let peers=[];
   const runtime=new Participants(root, async (_d,_p,args)=>JSON.stringify({result:args.at(-1).endsWith("/status")?
@@ -214,7 +220,8 @@ test("health distinguishes an isolated node from a live connection to its invite
 });
 
 test("a changed frozen genesis is rejected before starting Docker", async t=>{
-  const {manager,id,raw,calls}=fixture(t); manager.import(raw,sha(raw)); manager.prepareSentry(id);
+  const {manager,id,raw,calls}=fixture(t); manager.import(raw,sha(raw)); manager.prepareSentry(id, "sentry.example.org");
+  manager.reviewDeployment(id, "sentry");
   fs.appendFileSync(path.join(manager.dir(id,"sentry"),"identity/tendermint/config/genesis.json")," ");
   await assert.rejects(manager.operate(id,"sentry","start"),/Genesis or network binding changed/);
   assert.deepEqual(calls,[]);
