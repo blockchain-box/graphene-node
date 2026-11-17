@@ -1,6 +1,6 @@
 """Build a public development source kit from an explicit allowlist.
 
-Maintainer tool (Python 3 + npm); generated kit users only need Node.js/npm.
+Maintainer tool (Python 3 + npm); checkpoint restore also uses Python 3 on macOS/Linux.
 No wallet, runtime, local configuration, node_modules or private identity is copied.
 """
 import hashlib
@@ -17,19 +17,7 @@ OUTPUT = ROOT / 'dist/operator'
 
 
 def selected_files():
-    files = [ROOT / name for name in [
-        'package.json', 'package-lock.json', 'PARTICIPANTS.md',
-        'Join Graphene.command', 'Join Graphene.cmd',
-        'Join Graphene Sentry.command', 'Join Graphene Sentry.cmd',
-        'participant/server.js', 'participant/enrollment.js', 'participant/runtime.js', 'participant/validator-compose.json', 'participant/public-tendermint.conf',
-        'participant/ui/index.html', 'participant/ui/app.js', 'participant/ui/progress.js', 'participant/ui/styles.css', 'participant/ui/graphene-logo.png',
-        'agents/lib/validator-files.js', 'agents/lib/keystore.js', 'agents/lib/logger.js',
-        'agents/validator-agent/src/keygen.js', 'agents/validator-agent/src/utils.js',
-        'network/utils/package.json', 'network/utils/dist/index.js', 'network/utils/dist/index.cjs',
-        'scripts/launcher-icons/LICENSE', 'scripts/launcher-icons/LUCIDE_LICENSE',
-    ]]
-    files += [ROOT / 'scripts/launcher-icons' / (name + '.svg') for name in
-              ['home','network','server','shield-check','layers','refresh-cw']]
+    files = [ROOT / name for name in json.loads((ROOT/'participant/kit-files.json').read_text())]
     for file in files:
         if not file.is_file() or file.is_symlink() or not file.resolve().is_relative_to(ROOT):
             raise ValueError(f'Missing or unsafe kit input: {file.relative_to(ROOT)}')

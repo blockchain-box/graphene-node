@@ -1,4 +1,5 @@
-import { syncProgress } from './progress.js';
+import { syncProgress } from "./progress.js";
+import { deploymentSteps, stageIds } from "./deployment-steps.js";
 const $ = (id) => document.getElementById(id);
 const esc = (v) =>
   String(v ?? "").replace(
@@ -15,25 +16,37 @@ const pages = {
     "Workspace",
     "Overview",
     "home",
-    "Your networks and the nodes you run on this machine.",
+    "Join existing networks and manage your local or cloud nodes.",
   ],
   networks: [
     "Workspace",
-    "Networks",
+    "Public networks",
     "network",
-    "Import an invitation from the operator of an existing Graphene network.",
+    "Dev, Test and Prod are loaded automatically from their public sentry APIs.",
   ],
   validator: [
     "Deployments",
-    "Validator node",
+    "Validator deployments",
     "shield-check",
-    "Enroll a validator on a running network using its approved runtime bundle.",
+    "Create and manage multiple independent private validators on the selected network.",
   ],
   sentry: [
     "Deployments",
-    "Sentry node",
+    "Sentry deployments",
     "server",
-    "Run a nonvoting peer that relays blocks for the network.",
+    "Create and manage multiple public sentries, each with its own host and endpoints.",
+  ],
+  monitor: [
+    "Operations",
+    "Network monitor",
+    "layers",
+    "Check services, peer connections and synchronization on your deployment hosts.",
+  ],
+  settings: [
+    "Workspace",
+    "Settings",
+    "server",
+    "Choose local or cloud hosts. The network invitation fixes genesis and the runtime release.",
   ],
   activity: [
     "Operations",
@@ -48,10 +61,23 @@ const labels = {
   production: "Production",
 };
 const actionLabels = {
+  "workspace-update": "Network invitation updated",
+  "remove-node": "Node and owned resources removed",
+  "cloud-account-save": "Cloud credential saved",
+  "create-node": "Node deployment created",
   import: "Network imported",
+  "import-url": "Network imported from sentry",
   identity: "Validator identity created",
   "prepare-validator": "Validator prepared",
+  "prepare-validator-public": "Validator runtime prepared from invitation",
   "prepare-sentry": "Sentry prepared",
+  host: "Deployment host saved",
+  review: "Deployment reviewed",
+  "host-install": "Cloud runtime installed",
+  connection: "Public sentry connection saved",
+  "checkpoint-select": "Checkpoint selected",
+  "checkpoint-current": "Current public checkpoint selected",
+  "checkpoint-restore": "Checkpoint restored",
   start: "Start node",
   stop: "Stop node",
 };
@@ -66,11 +92,42 @@ let state,
   page,
   formAction,
   pending = false;
+let removalReview = null;
 const observations = new Map();
-const current = () => state?.networks.find((n) => n.id === selected);
-const activeNode = () => current()?.nodes.find((n) => n.role === page);
-const key = () => selected + ":" + page;
+function workspaceNetworks() {
+  const networks = state?.networks || [];
+  const publicIds = new Set((state?.workspaces || []).map((workspace) => workspace.networkId).filter(Boolean));
+  return [
+    ...(state?.workspaces || []).map((workspace) => {
+      const network = networks.find((network) => network.id === workspace.networkId);
+      return { ...(network || { nodes: [], hosts: {} }), id: "workspace-" + workspace.id,
+        networkId: network?.id || null, workspaceId: workspace.id, name: workspace.label,
+        stage: workspace.stage, api: workspace.api, invitationUrl: workspace.invitationUrl,
+        workspaceError: workspace.error, workspaceUpdate: workspace.update, checkedAt: workspace.checkedAt };
+    }),
+    ...networks.filter((network) => !publicIds.has(network.id)),
+  ];
+}
+const current = () => {
+  const network = workspaceNetworks().find((n) => n.id === selected);
+  const nodeId = new URLSearchParams(location.search).get("node");
+  const node = network?.nodes.find((node) => node.nodeId === nodeId && node.role === page);
+  return node?.invitation ? { ...network, ...node.invitation,
+    publicPeer:node.connection?.mode === "public" ? node.connection.peer : node.invitation.publicPeer,
+    publicCheckpoint:node.publicCheckpoint } : network;
+};
+const selectedNodeId = () => new URLSearchParams(location.search).get("node");
+const activeNode = () => current()?.nodes.find((n) => n.role === page && n.nodeId === selectedNodeId());
+const activeHost = () => current()?.hosts?.[selectedNodeId() || page];
+const key = () => selected + ":" + page + ":" + (selectedNodeId() || "");
 async function api(action, data) {
+  if (data?.id?.startsWith("workspace-")) {
+    const workspace = workspaceNetworks().find((network) => network.id === data.id);
+    if (!workspace?.networkId) throw new Error("This public workspace is unavailable. Retry its API connection before creating nodes.");
+    data = { ...data, id: workspace.networkId };
+  }
+  if (data?.id && data.role && selectedNodeId() && !data.nodeId)
+    data = { ...data, nodeId: selectedNodeId() };
   const r = await fetch("/api/" + action, {
     method: data ? "POST" : "GET",
     headers: {
@@ -154,36 +211,57 @@ const summary = (label, value) =>
   '</p><div class="metric">' +
   esc(value) +
   "</div></div>";
-const importCard = () =>
-  surface(
-    "Connect to a network",
-    "Use the invitation file and checksum supplied by your network operator.",
-    empty("No network selected. Import an invitation to enable node setup."),
-    btn("import", "Import invitation", true),
+function publicWorkspaceCards() {
+  return surface(
+    "Public network workspaces",
+    "Each public API is a separate workspace. Network identity, genesis, pinned images and sentry peer are fetched automatically; no invitation file or checksum entry is needed.",
+    '<div class="tiles">' + workspaceNetworks().filter((network) => network.workspaceId).map((network) =>
+      '<a class="tile btn" href="?page=overview&network=' + network.id + '"><div><h3>' + esc(network.name) + '</h3><p>' + esc(network.api) + '</p><p>' +
+      esc(network.workspaceUpdate ? "Network update available" : network.networkId ? network.workspaceError ? "Cached network · API unavailable" : "Ready to join" : "API unavailable") + '</p></div></a>'
+    ).join("") + '</div>',
   );
+}
+function workspaceUnavailable(n) {
+  return surface(
+    esc(n.name) + " public network",
+    n.api,
+    '<p role="alert">' + esc(n.workspaceError || "Network invitation has not been loaded yet.") + '</p>' +
+    '<p class="dialog-copy">The API must publish its public network invitation at ' + esc(n.invitationUrl) + '. Retry to load this workspace automatically.</p>',
+    btn("workspace-refresh", "Retry public API", true),
+  );
+}
+const importCard = () => publicWorkspaceCards();
+
 function overview(n) {
   const list = n?.nodes || [];
   return (
     '<div class="stats">' +
-    summary("Networks", state.networks.length) +
-    summary("Local nodes", list.length) +
+    summary("Networks", workspaceNetworks().length) +
+    summary("Node deployments", list.length) +
     summary("Prepared", list.filter((x) => x.prepared).length) +
     "</div>" +
     (n
       ? surface(
           "Selected network",
-          labels[n.stage] + " · Chain " + esc(n.chain),
+          (n.name || labels[n.stage]) + " · Chain " + esc(n.chain),
           details([
             ["Release", n.release],
-            ["Peer transport", n.privatePeers ? "Approved Grph tunnel" : "Public Tendermint (sentries)"],
-        ["Primary peer", n.peer.split("@")[0]],
+            [
+              "Peer transport",
+              n.publicPeer
+                ? "Public Tendermint"
+                : n.privatePeers
+                  ? "Approved Grph upstream"
+                  : "Public Tendermint",
+            ],
+            ["Sentry peer", n.publicPeer || n.peer],
           ]),
           btn("networks", "View network"),
         )
       : importCard()) +
     surface(
       "Network nodes",
-      "Choose the role you want to run on this host.",
+      "Choose a role, a local or cloud host, and its network connection.",
       '<div class="tiles">' +
         tile(
           "validator",
@@ -191,7 +269,7 @@ function overview(n) {
         ) +
         tile(
           "sentry",
-          "Prepare a nonvoting peer using this network’s transport policy.",
+          "Deploy a public sentry with a domain and read-only chain gateway.",
         ) +
         "</div>",
     )
@@ -199,23 +277,26 @@ function overview(n) {
 }
 function networks(n) {
   if (!n) return importCard();
+  if (n.workspaceId && !n.networkId) return publicWorkspaceCards() + workspaceUnavailable(n);
   return (
+    publicWorkspaceCards() +
     surface(
       "Network details",
-      "Verified against the invitation checksum.",
+      n.workspaceId ? "Loaded automatically from this workspace’s HTTPS public sentry API." : "Verified against the invitation checksum.",
       details([
         ["Stage", labels[n.stage]],
         ["Chain ID", n.chain],
-        ["Network ID", n.id],
+        ["Network ID", n.networkId || n.id],
         ["Release", n.release],
-        ["Primary peer", n.peer],
+        ["Sentry peer", n.publicPeer || n.peer],
         ["Wallet RPC", n.rpc],
+        ["Current public checkpoint", n.publicCheckpoint?.available ? "Block " + n.publicCheckpoint.height + " · " + n.publicCheckpoint.createdAt : n.publicCheckpoint?.error || "Checking public network"],
       ]),
-      btn("import", "Import invitation"),
+      n.workspaceId ? btn("workspace-refresh", "Refresh public network") : "",
     ) +
     surface(
       "Next step",
-      "Choose a role to prepare a local node.",
+      "Choose a role and its deployment host.",
       '<div class="tiles">' +
         tile("validator", "Enroll and install an admitted validator.") +
         tile("sentry", "Prepare and start a nonvoting sentry.") +
@@ -234,10 +315,151 @@ const step = (num, title, hint, action) =>
   action +
   "</div>";
 const badge = (s) => '<span class="badge">' + s + "</span>";
+function selectedStep(n, node) {
+  const requested = new URLSearchParams(location.search).get("step");
+  if (stageIds.includes(requested)) return stageIds.indexOf(requested);
+  if (!activeHost()?.configured && !node) return 0;
+  return !node?.prepared ? 1 : 2;
+}
+function hostCard(n, role) {
+  const host = activeHost() || { kind: "local" };
+  return surface(
+    "Deployment host",
+    "Choose the same local or prepared-cloud-host path used by the deployment console.",
+    details([
+      [
+        "Target",
+        host.kind === "cloud"
+          ? providerLabels[host.provider] || host.provider
+          : "Local Docker Engine",
+      ],
+      [
+        "Host",
+        host.kind === "cloud"
+          ? host.user + "@" + host.address + ":" + host.port
+          : "This computer",
+      ],
+      [
+        "Identity storage",
+        host.kind === "cloud"
+          ? "Private directory on the cloud host"
+          : "Private directory on this computer",
+      ],
+      [
+        "Runtime",
+        host.kind === "cloud"
+          ? host.installed
+            ? "Installed"
+            : "Install required"
+          : "Bundled with this console",
+      ],
+    ]) +
+      (host.error ? '<p role="alert">' + esc(host.error) + "</p>" : "") +
+      "<p>Cloud hosts need Linux, Node.js 24+, npm, Python 3 and Docker Compose. Use an existing provider host and its verified SSH host-key file. Private validators can be reached through your SSH alias, VPN or Access proxy.</p>",
+    (!activeNode()?.hasData && !host.installed
+      ? btn("host", "Choose deployment host", true)
+      : "") +
+      (host.kind === "cloud" && !host.installed
+        ? btn("host-install", "Install participant runtime", true)
+        : "") +
+      ((host.configured || activeNode()?.hasData) &&
+      (host.kind === "local" || host.installed)
+        ? '<button data-step="chain" class="primary">Continue to network & identity →</button>'
+        : ""),
+  );
+}
+const providerLabels = {
+  hetzner: "Hetzner",
+  aws: "AWS",
+  gcp: "Google Cloud",
+  azure: "Microsoft Azure",
+  digitalocean: "DigitalOcean",
+  other: "Other cloud",
+};
+function cloudAccountsCard() {
+  const accounts = state.cloudAccounts?.accounts || [];
+  return surface("Cloud credentials", "Save named provider accounts to review and delete the dedicated VM and cloud resources of a removed node. Secrets stay on this computer.",
+    accounts.length ? accounts.map((account) => '<div class="row"><div><h3>' + esc(account.name) + '</h3><p>' + esc(providerLabels[account.provider]) + '</p></div><button data-action="cloud-account-edit" data-account-id="' + account.id + '">Edit</button></div>').join("") : empty("No cloud credentials saved."),
+    btn("cloud-account-open", "Add cloud credential", true));
+}
+function settingsPage(n) {
+  if (!n || (n.workspaceId && !n.networkId)) return cloudAccountsCard();
+  return surface(
+    "Network & deployment settings",
+    "The public network invitation pins this workspace’s genesis and release.",
+    details([
+      ["Network ID", n.networkId || n.id],
+      ["Release", n.release],
+      ["Chain ID", n.chain],
+    ]) +
+      '<div class="tiles">' +
+      tile(
+        "validator",
+        "Configure the private validator host and public sentry connection.",
+      ) +
+      tile("sentry", "Configure the public sentry host and domain.") +
+      "</div>",
+  ) + cloudAccountsCard();
+}
+function monitorPage(n) {
+  if (!n) return importCard();
+  return surface(
+    "Node deployments",
+    "Open a node to inspect its live services, block height and connected upstream peer.",
+    n.nodes.length
+      ? n.nodes
+          .map(
+            (node) =>
+              '<div class="row"><div><h3>' +
+              esc(
+                node.name || (node.role === "validator" ? "Private validator" : "Public sentry"),
+              ) +
+              "</h3><p>" +
+              esc(n.hosts?.[node.nodeId]?.address || "Local Docker Engine") +
+              " · " +
+              esc(node.identity?.node_id || "Identity incomplete") +
+              '</p></div><a class="btn" href="?page=' +
+              node.role +
+              "&network=" +
+              n.id +
+              '&node=' + node.nodeId + '&step=' + (node.prepared ? 'monitor' : 'host') + '">Open node</a></div>',
+          )
+          .join("")
+      : empty("Prepare a deployment first."),
+  );
+}
+function nodeList(n) {
+  const nodes = n.nodes.filter((node) => node.role === page);
+  const plural = page === "validator" ? "validators" : "sentries";
+  return surface(
+    page === "validator" ? "Validator nodes" : "Sentry nodes",
+    nodes.length + " " + plural + " on this network. Every node has its own host, identity, data and service controls.",
+    nodes.length ? nodes.map((node) => {
+      const host = n.hosts?.[node.nodeId];
+      return '<div class="row"><div><h3>' + esc(node.name) + '</h3><p>' +
+        esc(host?.kind === "cloud" ? (providerLabels[host.provider] || host.provider) + " · " + host.address : "Local Docker Engine") +
+        ' · ' + esc(node.prepared ? "Prepared" : node.identity ? "Identity created" : "Setup pending") +
+        '</p></div><div class="buttons left"><a class="btn" href="?page=' + page + '&network=' + n.id + '&node=' + node.nodeId + '">Manage node</a><button class="danger" data-action="remove-node" data-node-id="' + node.nodeId + '">Remove node</button></div></div>';
+    }).join("") : empty("No " + plural + " yet. Create a node to choose its host and begin setup."),
+    btn("create-node", page === "validator" ? "New validator" : "New sentry", true),
+  );
+}
 function rolePage(n) {
   if (!n) return importCard();
-  const node = activeNode(),
+  if (!selectedNodeId() || !activeNode()) return nodeList(n);
+  const node = activeNode()?.hasData ? activeNode() : undefined,
     validator = page === "validator";
+  const phase = selectedStep(n, node);
+  const navigation = deploymentSteps(phase, [
+    ...(node?.identity ? [0] : []),
+    ...(node?.prepared ? [1] : []),
+    ...(node?.restore?.phase === "complete" ? [2] : []),
+  ]);
+  if (phase === 0) return navigation + hostCard(n, page);
+  const host = activeHost();
+  if (host?.error) return navigation + hostCard(n, page);
+  if (host?.kind === "cloud" && !host.installed)
+    return navigation + hostCard(n, page);
   if (node && !node.identity)
     return surface(
       "Identity incomplete",
@@ -256,17 +478,21 @@ function rolePage(n) {
       step(
         "02",
         "Enroll with the network",
-        "Send public.json to the network operator. Register with your wallet, request a sentry connection, and obtain the extracted admission bundle.",
+        n.publicPeer
+          ? "Use the verified invitation to prepare the pinned runtime and public sentry connection automatically. Register and stake with your wallet to request voting participation."
+          : "This invitation advertises private transport but no public sentry peer. The network must publish a public upstream before this node can join directly. Its network data is already loaded; no bundle folder is required here.",
         node?.prepared
           ? badge("Prepared")
           : node
-            ? btn("prepare-validator", "Install bundle", true)
+            ? n.publicPeer
+              ? btn("prepare-validator-public", "Prepare from invitation", true)
+              : badge("Waiting for public sentry")
             : badge("Waiting for identity"),
       ) +
       step(
         "03",
         "Start and connect",
-        "After startup, send the public receipt to the operator to finish the approved sentry connection.",
+        "Start synchronization after reviewing the deployment. Voting power requires the network’s normal on-chain registration and admission.",
         node?.receipt
           ? btn("receipt", "Download receipt")
           : badge("Receipt after start"),
@@ -284,7 +510,11 @@ function rolePage(n) {
       step(
         "02",
         "Prepare the sentry",
-        n.privatePeers ? "Generate the public request on this host. Your transport and node keys stay here." : "This network accepts direct Tendermint connections; it does not require Grph approval for sentries.",
+        n.publicPeer
+          ? "Use your sentry’s public domain. The upstream connection comes automatically from the network invitation; no Grph approval is needed."
+          : n.privatePeers
+            ? "Use your sentry’s public domain and the invitation’s approved Grph upstream."
+            : "This network accepts direct Tendermint connections; it does not require Grph approval for sentries.",
         node?.prepared
           ? badge("Prepared")
           : btn("prepare-sentry", "Prepare sentry", true),
@@ -294,10 +524,25 @@ function rolePage(n) {
     "Existing network · " + labels[n.stage],
     steps,
   );
-  if (!validator && n.privatePeers && node?.identity) {
-    html += surface("Apply to join as a sentry","Download the public request and give it to the network operator. Start your sentry to wait for the approved primary tunnel.",details([["Node ID",node.identity.node_id],["Grph tunnel key",node.identity.tunnel_key]]),btn("sentry-request","Download sentry application"));
+  html = phase === 1 ? html : "";
+  if (
+    phase === 1 &&
+    !validator &&
+    n.privatePeers &&
+    node?.identity &&
+    node.connection?.mode !== "public"
+  ) {
+    html += surface(
+      "Apply to join as a sentry",
+      "Download the public request and give it to the network operator. Start your sentry to wait for the approved primary tunnel.",
+      details([
+        ["Node ID", node.identity.node_id],
+        ["Grph tunnel key", node.identity.tunnel_key],
+      ]),
+      btn("sentry-request", "Download sentry application"),
+    );
   }
-  if (validator && node?.identity) {
+  if (phase === 1 && validator && node?.identity) {
     const state = observations.get(key())?.enrollment;
     const hash = sessionStorage.getItem("participant-tx:" + key());
     const actions =
@@ -316,7 +561,9 @@ function rolePage(n) {
       details([
         ["Owner wallet", node.identity.operator_address],
         ["Wallet RPC", n.rpc],
-        ...(state?.balance !== undefined ? [["Available balance", state.balance + " GRPH"]] : []),
+        ...(state?.balance !== undefined
+          ? [["Available balance", state.balance + " GRPH"]]
+          : []),
         [
           "Enrollment",
           !state
@@ -339,14 +586,149 @@ function rolePage(n) {
         "</div>",
     );
   }
-  if (node?.prepared) {
+  if (phase === 1 && !validator && node?.invitationFingerprint) {
+    html += surface(
+      "Invite validators & sentries",
+      "Share this API URL and confirm its SHA-256 independently. It contains only public network and peer data.",
+      details([
+        [
+          "Invitation API",
+          "http://" + node.connection.domain + ":" + (node.connection.rpcPort || 26657) + "/api/invitation",
+        ],
+        ["Invitation SHA-256", node.invitationFingerprint],
+      ]),
+      btn("sentry-invitation", "Download invitation JSON"),
+    );
+  }
+  if (phase === 1 && node?.prepared) {
+    html += surface(
+      "Network connection",
+      validator
+        ? "The validator has no published ports. It connects outbound to a public sentry."
+        : "Publish this domain as a DNS-only record pointing to your host or router. Forward this node’s selected P2P and RPC ports.",
+      details(
+        validator
+          ? [
+              ["Sentry peer", node.connection?.peer || "Not configured"],
+              ["Validator ingress", "No published ports"],
+            ]
+          : [
+              [
+                "Public domain / IP",
+                node.connection?.domain || node.identity.endpoint,
+              ],
+              [
+                "P2P",
+                node.identity.node_id +
+                  "@" +
+                  (node.connection?.domain || "your-domain") +
+                  ":" + (node.connection?.p2pPort || 26656),
+              ],
+              [
+                "Read-only RPC",
+                "http://" +
+                  (node.connection?.domain || "your-domain") +
+                  ":" + (node.connection?.rpcPort || 26657),
+              ],
+            ],
+      ),
+      (validator && !node.connection
+        ? btn(
+            "connection",
+            n.publicPeer
+              ? "Use sentry from invitation"
+              : "Configure public sentry",
+            true,
+          )
+        : "") +
+        '<button data-step="runtime">Continue to checkpoint & install →</button>',
+    );
+  }
+  if (phase >= 2 && !node?.prepared)
+    html =
+      empty("Complete Network & identity before installing this node.") +
+      '<button data-step="chain">Go to network & identity</button>';
+  if (
+    phase === 2 &&
+    node?.prepared &&
+    validator &&
+    node.connection?.mode !== "public"
+  )
+    return (
+      navigation +
+      surface(
+        "Public sentry connection required",
+        "Configure the private validator’s upstream peer before installing.",
+        "",
+        '<button data-step="chain">Configure network connection</button>',
+      )
+    );
+  if (phase >= 2 && node?.prepared) {
+    const cp = node.checkpoint;
+    if (phase === 2)
+      html += surface(
+        "Review deployment",
+        "Review the pinned release, upstream peer and published ports before starting containers.",
+        node.deployment
+          ? details([
+              ["Release", node.deployment.release],
+              ["Upstream peer", node.deployment.peer],
+              ["Services", node.deployment.services.join(", ")],
+              [
+                "Published ports",
+                node.deployment.ports.join("; ") || "None · private validator",
+              ],
+              ["Data directory on target host", node.deployment.storage],
+              ["Configuration fingerprint", node.deployment.fingerprint],
+            ])
+          : empty(
+              "Review the deployment to confirm its service topology and port exposure.",
+            ),
+        btn("review", "Review deployment", true),
+      );
+    if (phase === 2)
+      html += surface(
+        "Fast checkpoint sync",
+        "Restore a signed full snapshot before the first start. The publisher, frozen network, release images and downloaded bytes are verified. Keep your own identity and signing history.",
+        cp
+          ? details([
+              ["Selected block", cp.height],
+              ["Checkpoint", cp.id],
+              ["Publisher fingerprint", cp.fingerprint],
+              ["Restore", node.restore?.phase || "Ready to restore"],
+            ])
+          : n.publicCheckpoint?.available
+            ? details([["Current public block", n.publicCheckpoint.height], ["Published", n.publicCheckpoint.createdAt], ["Publisher", n.publicCheckpoint.fingerprint]])
+            : '<p>' + esc(n.publicCheckpoint?.error || "Checking the public network for a current checkpoint.") + '</p>',
+        (!node.restore && n.publicCheckpoint?.available
+          ? btn("checkpoint-current", cp ? "Use current public checkpoint" : "Use public checkpoint", true)
+          : "") +
+          (cp && node.restore?.phase !== "complete"
+            ? btn(
+                "checkpoint-restore",
+                node.restore
+                  ? "Retry checkpoint restore"
+                  : "Restore checkpoint & start",
+                true,
+              )
+            : ""),
+      );
     const obs = observations.get(key()) || {};
     html += surface(
       "Runtime",
-      "Controls apply only to this local node.",
+      "Controls apply only to the selected deployment host. Validator ports remain private; sentries publish P2P and bounded read-only RPC.",
       details([
         ["Peer ID", node.identity.node_id],
-        ...(validator ? [] : [["Peer connections", n.privatePeers ? "Approved primary via Grph" : node.identity.endpoint || "Outbound only"]]),
+        ...(validator
+          ? []
+          : [
+              [
+                "Public peer endpoint",
+                node.identity.endpoint ||
+                  node.connection?.domain ||
+                  "Legacy configuration",
+              ],
+            ]),
       ]) +
         '<div class="buttons left">' +
         btn("start", "Start node", true) +
@@ -357,7 +739,14 @@ function rolePage(n) {
         "</div>" +
         (obs.status
           ? obs.status.length
-            ? '<p>Services checked ' + esc(obs.statusAt ? new Date(obs.statusAt).toLocaleTimeString() : obs.at) + '</p>' + details(
+            ? "<p>Services checked " +
+              esc(
+                obs.statusAt
+                  ? new Date(obs.statusAt).toLocaleTimeString()
+                  : obs.at,
+              ) +
+              "</p>" +
+              details(
                 obs.status.map((r) => [
                   esc(r.service),
                   [r.state, r.health].filter(Boolean).join(" · "),
@@ -366,14 +755,41 @@ function rolePage(n) {
             : empty("No containers found for this node.")
           : "") +
         (obs.health
-          ? '<p>Health checked ' + esc(new Date(obs.healthAt).toLocaleTimeString()) + '</p>' + details([
+          ? "<p>Health checked " +
+            esc(new Date(obs.healthAt).toLocaleTimeString()) +
+            "</p>" +
+            details([
               ["Block height", obs.health.height],
-              ["Primary peer", obs.health.primaryConnected ? "Connected" : "Disconnected"],
-              ["Sync", obs.health.height === "0" ? "Waiting for first block" : obs.health.catchingUp ? "Catching up" : "Caught up"],
+              [
+                "Primary peer",
+                obs.health.primaryConnected ? "Connected" : "Disconnected",
+              ],
+              [
+                "Sync",
+                obs.health.height === "0"
+                  ? "Waiting for first block"
+                  : obs.health.catchingUp
+                    ? "Catching up"
+                    : "Caught up",
+              ],
               ["Last block", obs.health.blockTime],
               ["Voting power", obs.health.votingPower],
-              ...(obs.progress ? [["Replay speed", obs.progress.blocksPerSecond.toFixed(obs.progress.blocksPerSecond >= 1 ? 1 : 3) + " blocks/s"],
-                ["100 blocks at this rate", "About " + Math.ceil(obs.progress.secondsPer100) + " seconds"]] : []),
+              ...(obs.progress
+                ? [
+                    [
+                      "Replay speed",
+                      obs.progress.blocksPerSecond.toFixed(
+                        obs.progress.blocksPerSecond >= 1 ? 1 : 3,
+                      ) + " blocks/s",
+                    ],
+                    [
+                      "100 blocks at this rate",
+                      "About " +
+                        Math.ceil(obs.progress.secondsPer100) +
+                        " seconds",
+                    ],
+                  ]
+                : []),
             ])
           : "") +
         (obs.logs
@@ -384,10 +800,10 @@ function rolePage(n) {
         (obs.at ? "<p>Last checked " + esc(obs.at) + "</p>" : ""),
     );
   }
-  return html;
+  return navigation + html;
 }
 function activity(n) {
-  const items = state.activity.filter((a) => !n || n.id === a.id);
+  const items = state.activity.filter((a) => !n || (n.networkId || n.id) === a.id);
   return surface(
     "Recent actions",
     "Most recent first · " + (n ? "Selected network" : "All networks"),
@@ -399,7 +815,7 @@ function activity(n) {
               esc(actionLabels[a.action] || a.action) +
               "</h3><p>" +
               esc(
-                [a.role, a.ok ? "Completed" : "Failed"]
+                [a.role, a.nodeId, a.ok ? "Completed" : "Failed"]
                   .filter(Boolean)
                   .join(" · "),
               ) +
@@ -432,18 +848,16 @@ function render() {
         "</a>",
     )
     .join("");
-  $("network").innerHTML = state.networks.length
-    ? state.networks
+  $("network").innerHTML = workspaceNetworks().length
+    ? workspaceNetworks()
         .map(
           (item) =>
             '<option value="' +
             item.id +
             '">' +
             esc(
-              labels[item.stage] +
-                " · " +
-                item.chain +
-                (state.networks.some(
+              (labels[item.stage] || item.name) +
+                (!item.workspaceId && workspaceNetworks().some(
                   (other) =>
                     other.id !== item.id &&
                     other.chain === item.chain &&
@@ -457,8 +871,8 @@ function render() {
         .join("")
     : "<option>No network imported</option>";
   if (n) $("network").value = n.id;
-  $("crumb").textContent = n ? labels[n.stage] : "Local host";
-  $("stage").textContent = n ? n.stage : "local";
+  $("crumb").textContent = n ? n.name || labels[n.stage] : "Local host";
+  $("stage").textContent = n ? n.workspaceId || n.stage : "local";
   $("category").textContent = p[0];
   $("title").textContent = p[1];
   $("intro").textContent = p[3];
@@ -469,7 +883,28 @@ function render() {
         ? networks(n)
         : page === "activity"
           ? activity(n)
-          : rolePage(n);
+          : page === "settings"
+            ? settingsPage(n)
+            : page === "monitor"
+              ? monitorPage(n)
+              : (selectedNodeId() && activeNode()
+                ? surface(esc(activeNode().name), "Manage only this node’s host, identity and services.", "", btn("all-nodes", "All " + (page === "validator" ? "validators" : "sentries")) + btn("create-node", page === "validator" ? "New validator" : "New sentry") + '<button class="danger" data-action="remove-node">Remove node</button>')
+                : "") + rolePage(n);
+  if (n?.workspaceUpdate) {
+    const update = n.workspaceUpdate;
+    $("content").insertAdjacentHTML("afterbegin", surface(
+      "Network update available",
+      "Installed release " + esc(update.currentRelease) + " · API release " + esc(update.release),
+      '<p class="dialog-copy">Update the workspace invitation for new nodes. Existing nodes keep their pinned release, identity, data and service configuration.</p>' +
+      (update.networkChanged ? '<p role="alert">The API advertises a different frozen network. It cannot replace the network of your existing nodes.</p>' : ""),
+      update.networkChanged ? "" : btn("workspace-update", "Update network", true),
+    ));
+  }
+  if (n?.workspaceId && !n.networkId && !["networks","settings"].includes(page)) {
+    $("content").innerHTML = workspaceUnavailable(n);
+  } else if (n?.workspaceId && n.workspaceError && page !== "networks") {
+    $("content").insertAdjacentHTML("afterbegin", surface("Public API unavailable", "Your saved nodes and last verified network remain available.", '<p role="alert">' + esc(n.workspaceError) + '</p>', btn("workspace-refresh", "Retry public API")));
+  }
   for (const b of $("content").querySelectorAll("button"))
     b.disabled = pending || state.busy;
 }
@@ -487,13 +922,17 @@ function route() {
     : state.defaultPage;
   const id =
     q.get("network") || localStorage.getItem("graphene-participant-network");
-  selected = state.networks.some((n) => n.id === id)
+  selected = workspaceNetworks().some((n) => n.id === id)
     ? id
-    : state.networks[0]?.id;
+    : workspaceNetworks()[0]?.id;
   render();
 }
 function go(p) {
   page = p;
+  const clean = new URL(location.href);
+  clean.searchParams.delete("step");
+  clean.searchParams.delete("node");
+  history.replaceState(null, "", clean);
   setRoute();
   feedback();
   if (document.body.classList.contains("nav-open")) menu(false);
@@ -509,6 +948,10 @@ window.addEventListener("popstate", () => {
 $("network").onchange = () => {
   selected = $("network").value;
   localStorage.setItem("graphene-participant-network", selected);
+  const url = new URL(location.href);
+  url.searchParams.delete("node");
+  url.searchParams.delete("step");
+  history.replaceState(null, "", url);
   setRoute();
   feedback();
   render();
@@ -535,7 +978,14 @@ function download(value, name) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-const field = (name, label, type = "text", help = "", opts = "", required = true) =>
+const field = (
+  name,
+  label,
+  type = "text",
+  help = "",
+  opts = "",
+  required = true,
+) =>
   '<label class="field">' +
   label +
   '<input name="' +
@@ -547,10 +997,128 @@ const field = (name, label, type = "text", help = "", opts = "", required = true
   ">" +
   (help ? "<small>" + help + "</small>" : "") +
   "</label>";
+function fieldHelp(text) {
+  return '<details class="field-help"><summary aria-label="Field help">?</summary><p>' + esc(text) + '</p></details>';
+}
+function credentialForm(provider = "hetzner", editing = null) {
+  formAction = "cloud-account-save";
+  const specs = state.cloudAccounts?.providers || {};
+  $("dialog-category").textContent = "Cloud credentials";
+  $("dialog-title").textContent = editing ? "Edit cloud credential" : "Add cloud credential";
+  $("form-error").textContent = "";
+  $("fields").innerHTML = '<p class="dialog-copy">Use a provider account allowed to inspect and delete this node’s VM, disks, snapshots and dedicated network resources. Blank fields preserve saved values when editing.</p>' +
+    (editing ? '<input type="hidden" name="id" value="' + editing.id + '">' : "") +
+    '<label class="field">Provider<select id="account-provider" name="provider" ' + (editing ? "disabled" : "") + '>' + Object.entries(specs).map(([key,spec]) => '<option value="' + key + '" ' + (key===provider?"selected":"") + '>' + esc(spec.name) + '</option>').join("") + '</select></label>' +
+    field("name", "Credential name", "text", "Choose a unique name for this provider account.", 'maxlength="80" value="' + esc(editing?.name || "") + '"') +
+    '<button type="button" id="account-name-generate">Generate name</button>' +
+    (specs[provider]?.fields || []).map((key) => {
+      const optional = key.endsWith("?"); key=key.replace("?", "");
+      const label = ({token:"API token",accessKeyId:"AWS access key ID",secretAccessKey:"AWS secret access key",sessionToken:"AWS session token (optional)",serviceAccountJson:"Service account JSON",tenantId:"Tenant ID",subscriptionId:"Subscription ID",clientId:"Client ID",clientSecret:"Client secret"})[key] || key;
+      const help="Use the value issued by your cloud provider. This cannot be generated by the node console. Credentials are saved privately and never returned to this form.";
+      return (key==="serviceAccountJson" ? '<label class="field">' + label + '<textarea name="' + key + '" autocomplete="off" spellcheck="false" ' + (!editing?"required":"") + '></textarea></label>' : field(key,label,["tenantId","subscriptionId","clientId"].includes(key)?"text":"password", "", 'autocomplete="off" spellcheck="false"',!editing&&!optional)) + fieldHelp(help);
+    }).join("") + (provider === "aws" && editing ? '<label class="field"><input type="checkbox" name="clearSessionToken"> Clear the saved optional AWS session token</label>' : "");
+  $("submit").textContent = "Save credential";
+  $("account-provider").onchange = () => credentialForm($("account-provider").value);
+  $("account-name-generate").onclick = () => { $("fields").querySelector('[name="name"]').value = (specs[provider]?.name || provider) + "-" + crypto.randomUUID().slice(0,8); };
+  $("dialog").showModal();
+}
+function removalForm() {
+  removalReview = null;
+  formAction = "remove-preview";
+  const node = activeNode(), host = activeHost();
+  $("dialog-category").textContent = "Node removal";
+  $("dialog-title").textContent = "Remove " + node.name;
+  $("form-error").textContent = "";
+  $("fields").innerHTML = '<p class="dialog-copy">This permanently removes this node’s containers, volumes, keys, data, checkpoint files and local configuration. A cloud node also removes its verified dedicated VM and the associated resources listed in the review.</p>' +
+    (page==="validator" ? '<p class="dialog-copy">This stops validator participation. On-chain registration and stake must be managed separately in your wallet.</p>' : "") +
+    (host?.kind === "cloud" ? '<label class="field">Cloud host ownership<select id="removal-cloud-mode" name="cloudMode"><option value="dedicated">Delete a dedicated VM and its associated resources</option><option value="shared">Remove this node from a shared host; keep the VM</option></select></label>' + fieldHelp("Delete the VM only when it belongs exclusively to this node. A shared VM is retained while this node’s containers and data are removed over SSH.") + '<label class="field">' + esc(providerLabels[host.provider]) + ' credential<select name="credentialId" required><option value="">Choose a saved provider credential</option>' + (state.cloudAccounts?.accounts||[]).filter(account=>account.provider===host.provider).map(account=>'<option value="'+account.id+'">'+esc(account.name)+'</option>').join("") + '</select></label>' + fieldHelp("Only saved credentials for this node’s cloud provider can be selected. Add or edit an account in Settings → Cloud credentials.") + '<label class="field"><input type="checkbox" name="dedicated" required> This VM is dedicated to this node and may be permanently deleted.</label><p class="dialog-copy">Removal is blocked if other nodes or containers are detected on this VM.</p>' : "");
+  if(host?.kind === "cloud") $("removal-cloud-mode").onchange = () => {
+    const dedicated = $("removal-cloud-mode").value === "dedicated";
+    const account = $("fields").querySelector('[name="credentialId"]');
+    const confirmation = $("fields").querySelector('[name="dedicated"]');
+    account.required=dedicated;account.disabled=!dedicated;confirmation.required=dedicated;confirmation.disabled=!dedicated;
+  };
+  $("submit").textContent = "Review removal";
+  $("dialog").showModal();
+}
+function removalDetails(plan) {
+  removalReview = plan; formAction = "remove-node";
+  $("fields").innerHTML = '<p class="dialog-copy">Permanently delete the following resources for <strong>' + esc(plan.name) + '</strong>. This cannot be undone.</p>' +
+    details([["Containers and volumes", plan.project], ["Cloud account", plan.accountName || "Not required"], ["Local files", plan.files.join("\n") || "None"], ["Remote files", plan.remoteFiles.join("\n") || "None"]]) +
+    (plan.resources.length ? '<h3>Cloud resources</h3><ul>' + plan.resources.map(resource=>'<li>'+esc(resource.type)+' · '+esc(resource.name||resource.id)+'</li>').join("") + '</ul>' : "") +
+    (plan.retained.length ? '<p class="dialog-copy">Shared resources retained: ' + esc(plan.retained.join(", ")) + '</p>' : "") +
+    (plan.resuming ? '<p class="dialog-copy">Resuming interrupted removal. Completed: ' + esc(plan.completed.join(", ") || "none") + '</p>' : "") +
+    '<p class="dialog-copy">Shared workspace data, credential profiles and shared Docker images are retained.</p><p id="removal-progress" role="status"></p>' + field("confirmation", "Type " + esc(plan.confirmation), "text", "Confirm deletion of this exact node.", 'autocomplete="off"');
+  $("submit").textContent = "Remove permanently";
+}
 function dialog(action) {
   formAction = action;
   $("form-error").textContent = "";
   const data = {
+    review: [
+      "Review deployment",
+      "Check the generated service topology and port exposure for this existing network. No containers are started by this action.",
+      "",
+      "Review deployment",
+    ],
+    host: [
+      "Choose deployment host",
+      "Use your local Docker Engine, or connect a prepared cloud host. No paid server is created by this action.",
+      '<label class="field">Deployment target<select name="kind" id="host-kind"><option value="local">Local Docker Engine</option><option value="cloud">Cloud provider · existing host</option></select></label>' +
+        '<fieldset id="cloud-fields" hidden disabled><legend>Cloud host connection</legend><label class="field">Cloud provider<select name="provider">' +
+        Object.entries(providerLabels)
+          .map(
+            ([id, name]) => '<option value="' + id + '">' + name + "</option>",
+          )
+          .join("") +
+        "</select></label>" +
+        field("address", "SSH hostname or configured alias") +
+        field("user", "SSH user", "text", "", 'value="root"') +
+        field(
+          "port",
+          "SSH port",
+          "number",
+          "",
+          'value="22" min="1" max="65535"',
+        ) +
+        field("key", "Private SSH key path on this computer") +
+        '<button type="button" id="ssh-generate">Generate SSH key</button><div id="ssh-public"></div>' +
+        field(
+          "knownHosts",
+          "Verified known_hosts file path",
+          "text",
+          "Confirm the cloud host key independently before connecting. The private SSH key stays on this computer.",
+        ) +
+        field(
+          "hostPublicKey",
+          "Verified SSH host public key",
+          "text",
+          "Optional: paste the host’s independently verified ssh-ed25519 public key to generate a known_hosts file.",
+          "",
+          false,
+        ) +
+        '<button type="button" id="ssh-trust">Save verified host key</button><p id="ssh-result" role="status"></p></fieldset>',
+      "Check & save host",
+    ],
+    "host-install": [
+      "Install cloud participant runtime",
+      "Copy only the bundled public participant runtime to the selected SSH host, install its locked npm dependencies, and import this network invitation. Identities are generated on that host. This does not update existing blockchain services or deploy any frontend.",
+      "",
+      "Install participant runtime",
+    ],
+    connection: [
+      "Connect private validator to public sentry",
+      "Network and peer details come from the verified sentry invitation. This validator never publishes an incoming port.",
+      current()?.publicPeer
+        ? details([["Sentry peer", current().publicPeer]])
+        : field(
+            "peer",
+            "Public sentry peer address",
+            "text",
+            "Import this sentry’s invitation API to fill the peer automatically.",
+          ),
+      "Save sentry connection",
+    ],
     register: [
       "Register validator & stake",
       "Review the chain, wallet and stake before confirming the transaction in your wallet.",
@@ -567,6 +1135,24 @@ function dialog(action) {
       "Request an assignment to this network’s primary sentry. Network fees may apply.",
       "",
       "Review in wallet",
+    ],
+    "import-url": [
+      "Connect to public sentry",
+      "Load this sentry’s public invitation JSON to populate its network, genesis, pinned images and Tendermint peer. Confirm the invitation SHA-256 through a trusted channel.",
+      field(
+        "url",
+        "Sentry invitation API URL",
+        "url",
+        "For example: http://sentry.example.com:26657/api/invitation",
+      ) +
+        field(
+          "fingerprint",
+          "Invitation SHA-256",
+          "text",
+          "",
+          'minlength="64" maxlength="64" pattern="[A-Fa-f0-9]{64}" spellcheck="false"',
+        ),
+      "Load & verify network",
     ],
     import: [
       "Import network invitation",
@@ -587,9 +1173,16 @@ function dialog(action) {
         ),
       "Verify & import",
     ],
+    "create-node": [
+      page === "validator" ? "New validator" : "New sentry",
+      "Create a separate named deployment on this network. Its keys, host, data directory and service controls belong only to this node.",
+      field("name", "Node name", "text", "Use a unique name for this role and network.", 'maxlength="80"') +
+        '<div class="buttons left"><button type="button" id="node-name-generate">Generate name</button></div>',
+      "Create node",
+    ],
     identity: [
       "Create validator identity",
-      "Keep the private directory and passphrase backed up on this host.",
+      "Keys are generated on the selected deployment host. Back up its private directory and passphrase.",
       field(
         "operator",
         "Operator wallet address",
@@ -601,10 +1194,19 @@ function dialog(action) {
           "password",
           "Keystore passphrase",
           "password",
-          "Use at least 32 characters.",
+          "Use at least 32 characters. Save this passphrase in your password manager before creating the identity.",
           'minlength="32" autocomplete="new-password"',
-        ),
+        ) +
+        '<div class="buttons left"><button type="button" id="passphrase-generate">Generate passphrase</button><button type="button" id="passphrase-show" aria-pressed="false">Show passphrase</button><button type="button" id="passphrase-help" aria-label="Keystore passphrase help" aria-expanded="false" aria-controls="passphrase-explanation">?</button></div>' +
+        '<p id="passphrase-explanation" class="dialog-copy" hidden>This passphrase encrypts your validator keystore. Generate creates 64 random hexadecimal characters locally in your browser. Keep it with your private-directory backup; you need it to unlock the keystore.</p>' +
+        '<p id="passphrase-status" role="status"></p>',
       "Create identity",
+    ],
+    "prepare-validator-public": [
+      "Prepare validator from invitation",
+      "Use the verified sentry invitation’s genesis, pinned images and public Tendermint peer. Your own keys remain on the selected host. This prepares synchronization; it does not grant stake or voting power.",
+      "",
+      "Prepare from invitation",
     ],
     "prepare-validator": [
       "Install admission bundle",
@@ -619,19 +1221,59 @@ function dialog(action) {
     ],
     "prepare-sentry": [
       "Prepare sentry",
-      current()?.privatePeers ? "The approved primary dials this host through Grph. No public peer port is needed." : "This host will connect to the primary sentry listed in the network invitation.",
-      current()?.privatePeers ? "" : field(
+      "Configure a public endpoint for this sentry. Use a DNS-only record and allow inbound TCP on its selected P2P and read-only RPC ports.",
+      field(
         "address",
-        "Advertised IPv4 address (optional)",
+        "Public sentry domain or IPv4",
         "text",
-        "Leave empty to sync locally. To serve other peers, enter your public IPv4 address and allow TCP 26656 and 26657.",
-        "", false,
-      ),
+        "For local deployment, forward this node’s two ports from your router to this host. Use different ports for each sentry on the same machine.",
+      ) +
+        field("p2pPort", "Public P2P port", "number", "Use a free host port; each sentry on this host needs its own port.", 'value="26656" min="1" max="65535"') +
+        field("rpcPort", "Public read-only RPC port", "number", "Use another free host port for this sentry’s invitation API and read-only RPC.", 'value="26657" min="1" max="65535"'),
       "Prepare sentry",
+    ],
+    "checkpoint-select": [
+      "Select checkpoint",
+      "Confirm the publisher fingerprint through a trusted channel with the network operator. Use a full state snapshot from the same network and release.",
+      field(
+        "file",
+        "Signed checkpoint manifest",
+        "file",
+        "",
+        'accept=".json,application/json"',
+      ) +
+        field(
+          "fingerprint",
+          "Publisher fingerprint",
+          "text",
+          "",
+          'minlength="64" maxlength="64" pattern="[A-Fa-f0-9]{64}" spellcheck="false"',
+        ) +
+        field(
+          "baseUrl",
+          "Public snapshot folder URL",
+          "url",
+          "For example: http://203.0.113.1:26657/checkpoints/0123456789abcdef01234567/",
+        ),
+      "Verify & select",
+    ],
+    "checkpoint-current": [
+      "Use current public checkpoint",
+      "Fetch the latest signed checkpoint from this network’s public HTTPS API. The signature, publisher, frozen genesis, release images and age are checked automatically. Your node’s private identity is retained.",
+      details([["Block", current()?.publicCheckpoint?.height], ["Published", current()?.publicCheckpoint?.createdAt], ["Publisher", current()?.publicCheckpoint?.fingerprint]]),
+      "Verify & select",
+    ],
+    "checkpoint-restore": [
+      "Restore checkpoint & start " + page,
+      "This requires Python 3 on macOS or Linux and a local Docker engine. Keep this console open while the verified snapshot downloads and restores. Only a fresh node with no signing history or ledger data is eligible. Services must be stopped. After verification the node starts with its original keys and approved peer settings. An interrupted restore keeps its recovery journal; retry the same checkpoint.",
+      "",
+      "Restore checkpoint & start",
     ],
     start: [
       "Start " + page,
-      "Docker will pull the pinned release if needed and start services. Syncing can take time.",
+      page === "sentry"
+        ? "Start only this reviewed sentry using its selected public P2P and read-only RPC ports. Keep databases and administrative RPC private. Syncing can take time."
+        : "Start the reviewed private validator. It publishes no host ports and connects outbound to the configured public sentry. Syncing can take time.",
       "",
       "Start node",
     ],
@@ -660,6 +1302,73 @@ function dialog(action) {
       ]),
     );
   $("submit").textContent = data[3];
+  if (action === "create-node") {
+    $("node-name-generate").onclick = () => {
+      $("fields").querySelector('[name="name"]').value = (page === "validator" ? "Validator-" : "Sentry-") + crypto.randomUUID().slice(0, 8);
+    };
+  }
+  if (action === "identity") {
+    const password = $("fields").querySelector('[name="password"]');
+    $("passphrase-generate").onclick = () => {
+      if (pending) return;
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      password.value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      password.dispatchEvent(new Event("input", { bubbles: true }));
+      $("passphrase-status").textContent = "Passphrase generated. Use Show passphrase to copy it into your password manager before creating the identity.";
+    };
+    $("passphrase-show").onclick = () => {
+      if (pending) return;
+      const show = password.type === "password";
+      password.type = show ? "text" : "password";
+      $("passphrase-show").textContent = show ? "Hide passphrase" : "Show passphrase";
+      $("passphrase-show").setAttribute("aria-pressed", String(show));
+    };
+    $("passphrase-help").onclick = () => {
+      const explanation = $("passphrase-explanation");
+      explanation.hidden = !explanation.hidden;
+      $("passphrase-help").setAttribute("aria-expanded", String(!explanation.hidden));
+    };
+  }
+  if (action === "host") {
+    const sshAction = async (action) => {
+      $("form-error").textContent = "";
+      $("submit").disabled = true;
+      $("ssh-generate").disabled = $("ssh-trust").disabled = true;
+      try {
+        const values = Object.fromEntries(new FormData($("form")));
+        const result = await api(action, {
+          ...values,
+          id: selected,
+          role: page,
+        });
+        if (action === "ssh-generate") {
+          $("fields").querySelector("[name=key]").value = result.privateKeyPath;
+          $("ssh-public").innerHTML =
+            '<p>Install this public key on your cloud host. The private key stays here.</p><pre class="node-logs">' +
+            esc(result.publicKey) +
+            "</pre>";
+        } else {
+          $("fields").querySelector("[name=knownHosts]").value =
+            result.knownHosts;
+          $("ssh-result").textContent =
+            "Pinned host key · " + result.fingerprint;
+        }
+      } catch (error) {
+        $("form-error").textContent = error.message;
+      } finally {
+        $("submit").disabled = false;
+        $("ssh-generate").disabled = $("ssh-trust").disabled = false;
+      }
+    };
+    $("ssh-generate").onclick = () => sshAction("ssh-generate");
+    $("ssh-trust").onclick = () => sshAction("ssh-trust");
+    $("host-kind").onchange = () => {
+      const cloud = $("host-kind").value === "cloud";
+      $("cloud-fields").hidden = !cloud;
+      $("cloud-fields").disabled = !cloud;
+    };
+  }
   $("dialog").showModal();
 }
 $("close-dialog").onclick = $("cancel").onclick = () => $("dialog").close();
@@ -674,24 +1383,50 @@ $("form").onsubmit = async (e) => {
   if (pending) return;
   const data = new FormData(e.target),
     action = formAction;
-  const body = { id: selected, role: page, ...Object.fromEntries(data) };
+  let body = { id: selected, role: page, ...Object.fromEntries(data) };
+  if (action === "cloud-account-save") {
+    const provider = data.get("provider") || state.cloudAccounts.accounts.find(account=>account.id===data.get("id"))?.provider;
+    body = { ...(data.get("id") ? {id:data.get("id")} : {}), name:data.get("name"), provider, clearSessionToken:data.get("clearSessionToken")==="on",
+      values:Object.fromEntries((state.cloudAccounts.providers[provider]?.fields||[]).map(key=>key.replace("?", "")).map(key=>[key,data.get(key)||""])) };
+  }
+  if (action === "remove-preview") body = { ...body, dedicated:data.get("dedicated")==="on", deleteCloud:data.get("cloudMode")==="dedicated", sharedHost:data.get("cloudMode")==="shared" };
+  if (action === "remove-node") body = { id:selected, role:page, token:removalReview.token, confirmation:data.get("confirmation") };
+  if (action === "checkpoint-current") body = { ...body, checkpointId:current().publicCheckpoint.id, fingerprint:current().publicCheckpoint.fingerprint };
   pending = true;
   $("submit").disabled =
     $("cancel").disabled =
     $("close-dialog").disabled =
       true;
+  const progressTimer = action === "remove-node" ? setInterval(async () => {
+    try {
+      const status = await api("removal-status");
+      const progress = status.removals.find(item=>item.nodeId===removalReview.nodeId);
+      if (progress && $("removal-progress")) $("removal-progress").textContent = "Removed " + progress.completed + " of " + progress.total + " resource groups. Waiting for provider confirmation…";
+    } catch { /* The removal request reports its own error. */ }
+  }, 2000) : null;
   const original = $("submit").textContent;
   $("submit").textContent = "Working…";
   $("form-error").textContent = "";
   try {
-    if (action === "import") {
+    if (["import", "checkpoint-select"].includes(action)) {
       if (data.get("file").size > 7 * 1024 * 1024)
         throw new Error("Choose an invitation smaller than 7 MiB.");
       body.raw = await data.get("file").text();
       body.fingerprint = body.fingerprint.trim().toLowerCase();
+      if (action === "checkpoint-select") body.baseUrl = body.baseUrl.trim();
       delete body.file;
     }
+    if (action === "import-url") {
+      body.url = body.url.trim();
+      body.fingerprint = body.fingerprint.trim().toLowerCase();
+    }
+    if (action === "connection" && current().publicPeer)
+      body.peer = current().publicPeer;
     const result = await api(action, body);
+    if (action === "remove-preview") { removalDetails(result); return; }
+    if (action === "remove-node") {
+      const url = new URL(location.href);url.searchParams.delete("node");url.searchParams.delete("step");history.replaceState(null,"",url);
+    }
     if (["register", "request-sentry"].includes(action)) {
       const w = window.ethereum;
       if (!w)
@@ -723,7 +1458,13 @@ $("form").onsubmit = async (e) => {
       );
       return;
     }
-    if (action === "import") {
+    if (action === "create-node") {
+      const url = new URL(location.href);
+      url.searchParams.set("node", result.nodeId);
+      url.searchParams.set("step", "configuration");
+      history.replaceState(null, "", url);
+    }
+    if (["import", "import-url"].includes(action)) {
       selected = result.id;
       localStorage.setItem("graphene-participant-network", selected);
       setRoute(false);
@@ -731,20 +1472,46 @@ $("form").onsubmit = async (e) => {
     observations.delete(key());
     $("dialog").close();
     await refresh();
+    if (
+      (action === "host" && body.kind === "local") ||
+      action === "host-install"
+    ) {
+      const url = new URL(location.href);
+      url.searchParams.set("step", "chain");
+      history.replaceState(null, "", url);
+      render();
+    }
     feedback((actionLabels[action] || action) + " · completed.");
   } catch (error) {
+    if (action === "checkpoint-restore") {
+      try {
+        await refresh();
+      } catch {
+        /* Keep the original restore error. */
+      }
+    }
     $("form-error").textContent = error.message;
   } finally {
+    if (progressTimer) clearInterval(progressTimer);
     pending = false;
     $("submit").disabled =
       $("cancel").disabled =
       $("close-dialog").disabled =
         false;
-    $("submit").textContent = original;
+    $("submit").textContent = formAction === action ? original : formAction === "remove-node" ? "Remove permanently" : original;
     render();
   }
 };
 document.addEventListener("click", async (e) => {
+  const stage = e.target.closest("[data-step]");
+  if (stage && !pending) {
+    const url = new URL(location.href);
+    url.searchParams.set("step", stage.dataset.step);
+    history.pushState(null, "", url);
+    feedback();
+    render();
+    return;
+  }
   const link = e.target.closest("[data-page]");
   if (link) {
     if (e.ctrlKey || e.metaKey) return;
@@ -755,8 +1522,57 @@ document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-action]");
   if (!b || pending) return;
   const action = b.dataset.action;
+  if (action === "cloud-account-open") return credentialForm();
+  if (action === "cloud-account-edit") {
+    const account = state.cloudAccounts.accounts.find(account=>account.id===b.dataset.accountId);
+    return credentialForm(account.provider,account);
+  }
+  if (action === "remove-node") {
+    if (b.dataset.nodeId) {
+      const url = new URL(location.href);url.searchParams.set("node",b.dataset.nodeId);history.replaceState(null,"",url);render();
+    }
+    return removalForm();
+  }
+  if (action === "workspace-update") {
+    const workspace = current();
+    pending = true;
+    render();
+    try {
+      await api(action, { workspace: workspace.workspaceId, fingerprint: workspace.workspaceUpdate.fingerprint });
+      await refresh();
+      feedback("Network invitation updated. Existing nodes retain their pinned runtimes.");
+    } catch (error) {
+      try { await refresh(); } catch { /* Preserve the update error. */ }
+      feedback(error.message);
+    } finally { pending = false; render(); }
+    return;
+  }
+  if (action === "workspace-refresh") {
+    pending = true;
+    render();
+    try {
+      await api(action, { workspace: current().workspaceId });
+      await refresh();
+      feedback(current()?.workspaceError || "Public network refreshed.");
+    } catch (error) { feedback(error.message); }
+    finally { pending = false; render(); }
+    return;
+  }
   if (action === "networks") return go(action);
-  if (action === "sentry-request") return download(activeNode().identity, "sentry-application.json");
+  if (action === "all-nodes") return go(page);
+  if (action === "sentry-invitation") {
+    try {
+      download(
+        await api(action, { id: selected, role: "sentry" }),
+        "graphene-invitation.json",
+      );
+    } catch (error) {
+      feedback(error.message);
+    }
+    return;
+  }
+  if (action === "sentry-request")
+    return download(activeNode().identity, "sentry-application.json");
   if (action === "public" || action === "receipt")
     return download(
       action === "public" ? activeNode().identity : activeNode().receipt,
@@ -804,12 +1620,22 @@ document.addEventListener("click", async (e) => {
     );
     try {
       const value = await api(action, { id: selected, role: page });
-      const previous = observations.get(k) || {}, at = Date.now();
+      const previous = observations.get(k) || {},
+        at = Date.now();
       observations.set(k, {
         ...previous,
         [action]: value,
-        [action + 'At']: at,
-        ...(action === 'health' ? {progress: syncProgress(previous.health, value, previous.healthAt, at)} : {}),
+        [action + "At"]: at,
+        ...(action === "health"
+          ? {
+              progress: syncProgress(
+                previous.health,
+                value,
+                previous.healthAt,
+                at,
+              ),
+            }
+          : {}),
         at: new Date().toLocaleTimeString(),
       });
       feedback("Check complete.");

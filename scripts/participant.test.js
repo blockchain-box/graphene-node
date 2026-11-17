@@ -141,7 +141,7 @@ test("admitted validator handoff preserves keys, rejects genesis bundles and for
 });
 test("private API refuses unauthenticated and cross-origin imports; state never includes secrets", async (t) => {
   const { root, raw, id } = fixture(t);
-  const { server, token } = createConsole(root);
+  const { server, token } = createConsole(root, { fetchInvitation: async () => { throw new Error("Public API offline in this test"); } });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   t.after(() => new Promise((r) => server.close(r)));
   const origin = "http://127.0.0.1:" + server.address().port,

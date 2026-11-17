@@ -48,13 +48,13 @@ export async function enrollment(invite, identity, request = fetch) {
       method: "eth_getBalance",
       params: [owner, "latest"],
     });
-    if (!/^0x[\da-f]+$/i.test(balance?.result))
+    if (typeof balance?.result !== "string" || !/^(0x[\da-f]+|\d+)$/i.test(balance.result))
       throw new Error("Could not read the operator balance. Check enrollment again.");
     return {
       registered: false,
       pending: false,
       approved: false,
-      balance: formatEther(balance.result),
+      balance: formatEther(BigInt(balance.result)),
     };
   }
   const lower = (s) => String(s || "").toLowerCase();

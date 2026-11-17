@@ -1,0 +1,17 @@
+{
+  "name": "graphene-participant-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node participant/server.js",
+    "join": "node participant/server.js",
+    "join:sentry": "node participant/server.js --sentry"
+  },
+  "dependencies": {
+    "@grph-net/utils": "file:./network/utils",
+    "ethers": "6.17.0",
+    "tweetnacl": "1.0.3",
+    "z32": "1.1.0"
+  }
+}

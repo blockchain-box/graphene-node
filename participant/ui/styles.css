@@ -589,3 +589,62 @@ label.field {
     12px/1.65 ui-monospace,
     monospace;
 }
+/* DeploymentSteps from the controller, adapted to the source-only participant UI. */
+.deployment-steps {
+  display: flex;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+  margin: 0 0 24px;
+}
+.deployment-steps li {
+  flex: 1;
+}
+.deployment-steps button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  height: 100%;
+}
+.deployment-steps button span {
+  border-radius: 50%;
+  background: var(--sub);
+  min-width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+}
+.deployment-steps [aria-current="step"] {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--tint);
+}
+.field select {
+  width: 100%;
+  margin-top: 7px;
+  padding: 10px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin: 20px 0;
+}
+@media (max-width: 760px) {
+  .deployment-steps {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+button.danger { color: #dc4545; border-color: #dc454580; }
+.field textarea { width: 100%; min-height: 150px; margin-top: 6px; background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+.field-help { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.field-help summary { cursor: pointer; border: 1px solid var(--border); border-radius: 50%; width: 22px; text-align: center; list-style: none; }
+.field-help p { line-height: 1.6; margin: 8px 0; }
+
+#fields li, #fields dd { overflow-wrap: anywhere; }
