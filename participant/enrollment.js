@@ -133,7 +133,7 @@ export function transaction(invite, identity, state, action, amount) {
     from: identity.operator_address,
     to: contract,
     chainId: "0x" + invite.network.chain_id.toString(16),
-    value: "0x0",
+    value: action === "register" ? "0x" + parseEther(amount).toString(16) : "0x0",
     data,
   };
 }

@@ -677,7 +677,10 @@ export class Participants {
   prepareSentry(id, address = "", peer = "", options = {}) {
     const invite = this.network(id),
       dir = this.dir(id, "sentry");
-    address = hostname(address);
+    peer = peer || invite.publicPeer || "";
+    if (peer) peer = peerAddress(peer);
+    const privatePeers = Boolean(invite.privateTransport) && !peer;
+    address = privatePeers && address === "" ? "" : hostname(address);
     const p2pPort = Number(options.p2pPort || 26656);
     const rpcPort = Number(options.rpcPort || 26657);
     check([p2pPort, rpcPort].every((port) => Number.isInteger(port) && port > 0 && port <= 65535) && p2pPort !== rpcPort, "Choose two distinct public ports between 1 and 65535.");
@@ -691,15 +694,12 @@ export class Participants {
         check(![node.connection?.p2pPort || 26656, node.connection?.rpcPort || 26657].some((port) => port === p2pPort || port === rpcPort), "Another sentry on this machine uses these ports. Choose different P2P and RPC ports.");
       }
     }
-    peer = peer || invite.publicPeer || "";
-    if (peer) peer = peerAddress(peer);
     check(!fs.existsSync(dir), "This network already has a local sentry.");
     const tmp = fs.mkdtempSync(path.join(this.root, id, ".sentry-"));
     try {
       const tn = generateTendermintNodeKey(),
         key = generateTendermintValidatorKey();
       const compose = homeCompose(invite);
-      const privatePeers = Boolean(invite.privateTransport) && !peer;
       let request;
       if (privatePeers) {
         const seed = randomBytes(32);
@@ -719,10 +719,10 @@ export class Participants {
       } else delete compose.services["home-tunnel"];
       const node = compose.services.node;
       if (!privatePeers) directConnection(compose, peer || invite.peer);
-      if (address)
+      if (address && !privatePeers)
         node.command.push("--p2p.external-address", address + ":" + p2pPort);
-      node.networks = ["backend", "egress"];
-      if (address) node.ports = [p2pPort + ":26656"];
+      node.networks = privatePeers ? ["backend"] : ["backend", "egress"];
+      if (address && !privatePeers) node.ports = [p2pPort + ":26656"];
       compose.services.gateway = {
         image: invite.images.nginx,
         restart: "unless-stopped",
@@ -758,7 +758,7 @@ export class Participants {
       );
       const publicInvitation =
         JSON.stringify(
-          { ...publicFields, publicPeer: tn.nodeId + "@" + address + ":" + p2pPort },
+          { ...publicFields, ...(!privatePeers ? { publicPeer: tn.nodeId + "@" + address + ":" + p2pPort } : {}) },
           null,
           2,
         ) + "\n";
@@ -777,7 +777,6 @@ export class Participants {
         p2pPort,
         rpcPort,
       });
-      if (request) request.endpoint = address + ":" + p2pPort;
       write(path.join(tmp, "compose.json"), compose);
       write(path.join(tmp, "network.json"), invite.network);
       write(

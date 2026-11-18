@@ -50,6 +50,30 @@ function fixture(t) {
   });
   return { root, invite, raw, id, calls, manager };
 }
+test("private sentries keep consensus isolated even when publishing a read-only gateway", t => {
+  for (const address of ["", "sentry.example.org"]) {
+    const { manager, invite } = fixture(t);
+    invite.privateTransport = JSON.stringify({ transport: "grph-noise-v1", primary_tunnel_key: invite.tunnelPolicy.allowed_peer });
+    invite.peer = "a".repeat(40);
+    invite.network.file_hashes["peer-transport.json"] = sha(invite.privateTransport);
+    invite.network.network_id = sha(JSON.stringify(Object.fromEntries(Object.entries(invite.network.file_hashes).sort(([a], [b]) => a.localeCompare(b)))));
+    const raw = JSON.stringify(invite);
+    const id = manager.import(raw, sha(raw));
+    manager.prepareSentry(id, address);
+    const compose = JSON.parse(fs.readFileSync(path.join(manager.dir(id, "sentry"), "compose.json")));
+    assert.deepEqual(compose.services.node.networks, ["backend"]);
+    assert.equal(compose.services.node.ports, undefined);
+    assert.ok(!compose.services.node.command.includes("--p2p.external-address"));
+    assert.equal(compose.services["home-tunnel"].command[0], "server");
+    assert.deepEqual(compose.services.gateway.ports, [address ? "26657:26657" : "127.0.0.1::26657"]);
+    const request = manager.inventory()[0].nodes[0].identity;
+    assert.deepEqual(Object.keys(request).sort(), ["format", "network_id", "node_id", "role", "tunnel_key"]);
+    const published = fs.readFileSync(path.join(manager.dir(id, "sentry"), "public/invitation.json"), "utf8");
+    assert.equal(JSON.parse(published).publicPeer, undefined);
+    assert.equal(manager.import(published, sha(published)), id);
+  }
+});
+
 test("imports by fingerprint, persists bindings and prepares an independent nonvoting peer", async (t) => {
   const { root, manager, id, raw, invite, calls } = fixture(t);
   assert.throws(() => manager.import(raw, "a".repeat(64)), /SHA-256/);
