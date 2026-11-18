@@ -1,4 +1,4 @@
-# Bundled from grph-deployment/dashboard/snapshot_host.py; fixed participant Compose project.
+# Checkpoint operations for the fixed participant Compose project.
 """Fixed full-snapshot protocol. Public artifacts never contain host configuration or keys."""
 
 import fcntl

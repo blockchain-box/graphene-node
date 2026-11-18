@@ -1,5 +1,6 @@
 // Standalone public checkpoint bootstrap. No controller checkout is needed.
 import fs from 'node:fs';
+import { jobContext, logOutput } from './jobs.js';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -34,11 +35,12 @@ export function restoreCheckpoint(directory, project, role, selection) {
     if (key.startsWith('COMPOSE_') || ['ABCI_DB_PASSWORD', 'ABCI_ADMIN_PASSWORD', 'MPT_DB_API_TOKEN'].includes(key)) delete env[key];
   // An explicit context wins over an ambient socket, just as in the normal launcher.
   if (env.DOCKER_CONTEXT) delete env.DOCKER_HOST;
+  logOutput('Verifying, downloading and restoring the selected checkpoint…\n');
   return new Promise((resolve, reject) => {
-    const child = spawn('python3', [fileURLToPath(host)], { cwd: directory, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('python3', [fileURLToPath(host)], { cwd: directory, env, stdio: ['pipe', 'pipe', 'pipe'], signal:jobContext()?.signal });
     let stdout = '', stderr = '';
     child.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(-4 * 1024 ** 2); });
-    child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4000); });
+    child.stderr.on('data', chunk => { logOutput(chunk.toString()); stderr = (stderr + chunk).slice(-4000); });
     child.on('error', error => reject(Error(error.code === 'ENOENT' ? 'Install Python 3 to restore a checkpoint.' : error.message)));
     child.stdin.on('error', () => {});
     child.on('close', code => {

@@ -34,3 +34,6 @@ GEMINI.md
 .claude/
 .codex/
 graphify-out/
+
+# Bundled browser runtime is built before launch and operator-kit packaging.
+/participant/ui/router.bundle.js

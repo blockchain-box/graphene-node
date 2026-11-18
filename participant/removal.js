@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { jobContext, logOutput } from "./jobs.js";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { check, Participants } from "./runtime.js";
@@ -257,6 +258,7 @@ export class NodeRemoval {
     plan.started = true;
     this.save(file, plan);
     const finish = (name) => {
+      logOutput("Removed " + name + "\n");
       if (!plan.completed.includes(name)) plan.completed.push(name);
       this.save(file, plan);
     };
@@ -269,6 +271,8 @@ export class NodeRemoval {
         for (const resource of plan.cloud.resources) {
           const key = resource.type + ":" + resource.id;
           if (!plan.completed.includes(key)) {
+            jobContext()?.signal?.throwIfAborted();
+            logOutput("Removing " + resource.type + " " + resource.id + "…\n");
             await cloud.destroy(
               resource,
               () => {

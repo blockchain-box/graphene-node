@@ -1,11 +1,13 @@
-// The same prepared-host path as grph-deployment: explicit provider, strict SSH
+// Prepared cloud hosts use an explicit provider, strict SSH
 // host trust, independent data directory, then install/monitor the pinned runtime.
 import fs from "node:fs";
+import { jobContext, logOutput, environmentSecrets, redact } from "./jobs.js";
 import path from "node:path";
 import os from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { CloudAccounts } from "./cloud-accounts.js";
 import { check } from "./runtime.js";
 
 export const providers = [
@@ -21,7 +23,10 @@ const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
 function run(command, args, input, timeout = 120000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      signal: jobContext()?.signal,
+    });
     const output = [],
       errors = [];
     let size = 0;
@@ -32,6 +37,7 @@ function run(command, args, input, timeout = 120000) {
       else output.push(chunk);
     });
     child.stderr.on("data", (chunk) => {
+      logOutput(chunk.toString());
       errors.push(chunk);
       if (errors.length > 30) errors.shift();
     });
@@ -74,19 +80,47 @@ export class Hosts {
   async cloudIdentity(id, role) {
     const host = this.get(id, role);
     check(host.kind === "cloud", "Select a cloud node.");
-    const script = fs.readFileSync(new URL("./cloud-metadata.js", import.meta.url), "utf8");
-    const result = await this.ssh(host, "node --input-type=module -e " + quote(script) + " -- --cloud-metadata",
-      JSON.stringify({ provider: host.provider, id, role, nodeId: this.nodes.selection?.nodeId || role }), 60000);
+    const script = fs.readFileSync(
+      new URL("./cloud-metadata.js", import.meta.url),
+      "utf8",
+    );
+    const result = await this.ssh(
+      host,
+      "node --input-type=module -e " + quote(script) + " -- --cloud-metadata",
+      JSON.stringify({
+        provider: host.provider,
+        id,
+        role,
+        nodeId: this.nodes.selection?.nodeId || role,
+      }),
+      60000,
+    );
     const identity = JSON.parse(result.toString());
     check(!identity.error, identity.error);
     return identity;
   }
   async removalRequest(id, role, action, fingerprint) {
-    const host=this.get(id,role);
+    const host = this.get(id, role);
     check(host.kind === "cloud", "Select a cloud node.");
-    const script=fs.readFileSync(new URL("./removal-files.js",import.meta.url),"utf8");
-    const result=await this.ssh(host,"node --input-type=module -e "+quote(script)+" -- --node-removal",JSON.stringify({action,id,role,nodeId:this.nodes.selection?.nodeId||role,fingerprint}),180000);
-    const value=JSON.parse(result.toString());check(!value.error,value.error);return value;
+    const script = fs.readFileSync(
+      new URL("./removal-files.js", import.meta.url),
+      "utf8",
+    );
+    const result = await this.ssh(
+      host,
+      "node --input-type=module -e " + quote(script) + " -- --node-removal",
+      JSON.stringify({
+        action,
+        id,
+        role,
+        nodeId: this.nodes.selection?.nodeId || role,
+        fingerprint,
+      }),
+      180000,
+    );
+    const value = JSON.parse(result.toString());
+    check(!value.error, value.error);
+    return value;
   }
   ssh(host, command, input, timeout) {
     return run(
@@ -213,6 +247,7 @@ export class Hosts {
         /^[a-z_][a-z0-9_-]{0,31}$/.test(body.user || ""),
         "Enter the remote Linux user.",
       );
+      logOutput("Checking the selected cloud host over SSH…\n");
       const port = Number(body.port || 22);
       check(
         Number.isInteger(port) && port > 0 && port <= 65535,
@@ -225,7 +260,13 @@ export class Hosts {
             fs.statSync(body[name]).isFile(),
           "Choose an absolute existing " + name + " file on this computer.",
         );
+      if (body.credentialId)
+        new CloudAccounts(this.nodes.root).get(
+          body.credentialId,
+          body.provider,
+        );
       host = {
+        ...(body.credentialId ? { credentialId: body.credentialId } : {}),
         kind: "cloud",
         configured: true,
         provider: body.provider,
@@ -336,6 +377,42 @@ export class Hosts {
       fs.rmSync(temporary, { recursive: true, force: true });
     }
   }
+  async inspect(id, role) {
+    const host = this.get(id, role);
+    check(
+      host.installed &&
+        /^\.graphene\/join-runtimes\/[a-f0-9]{64}$/.test(host.runtime),
+      "Install the participant runtime on this cloud host first.",
+    );
+    // Inspect existing helpers too, without replacing software or node configuration.
+    const source = fs
+      .readFileSync(new URL("./inspection.js", import.meta.url), "utf8")
+      .replace(
+        /import \{ logOutput \} from [^;]+;/,
+        "const logOutput = text => process.stderr.write(text);",
+      )
+      .replace(
+        "export async function inspectNode",
+        "async function inspectNode",
+      );
+    const script =
+      source +
+      "\n" +
+      environmentSecrets.toString() +
+      "\n" +
+      redact.toString() +
+      '\nimport { Participants } from "./participant/runtime.js";\nlet input="";for await(const chunk of process.stdin)input+=chunk;const body=JSON.parse(input);const nodes=new Participants(process.env.HOME+"/.graphene/participants").selectNode(body.id,body.role,body.nodeId);const secrets=environmentSecrets(nodes.dir(body.id,body.role)+"/.env");const report=await inspectNode(nodes,body.id,body.role);process.stdout.write(JSON.stringify(report,(_key,value)=>typeof value==="string"?redact(value,secrets):value));';
+    const output = await this.ssh(
+      host,
+      'cd "$HOME"/' +
+        quote(host.runtime) +
+        " && node --input-type=module -e " +
+        quote(script),
+      JSON.stringify({ id, role, nodeId: this.nodes.selection?.nodeId }),
+      180000,
+    );
+    return JSON.parse(output.toString());
+  }
   async call(id, role, action, body = {}) {
     const host = this.get(id, role);
     check(
@@ -372,39 +449,53 @@ export class Hosts {
       };
       delete body.bundle;
     }
+    logOutput("Running " + action + " on " + host.address + "…\n");
     const result = await this.ssh(
       host,
       'cd "$HOME"/' +
         quote(host.runtime) +
         " && node participant/remote-worker.js",
-      JSON.stringify({ action, body: { ...body, id, role, nodeId: this.nodes.selection?.nodeId } }),
+      JSON.stringify({
+        action,
+        body: { ...body, id, role, nodeId: this.nodes.selection?.nodeId },
+      }),
       action === "checkpoint-restore" ? 3600000 : 600000,
     );
     const value = JSON.parse(result.toString());
     check(!value.error, value.error);
+    if (action === "logs" && !value.outputStreamed && value.text)
+      logOutput(value.text + "\n");
     return value;
   }
   async inventory() {
     const networks = this.nodes.inventory();
     await Promise.all(
       networks.flatMap((network) =>
-        this.nodes.deployments(network.id).map(async ({ nodeId, role, name }) => {
-          const scoped = new Hosts(this.nodes.selectNode(network.id, role, nodeId));
-          const host = scoped.get(network.id, role);
-          network.hosts ||= {};
-          network.hosts[nodeId] = host;
-          if (host.kind !== "cloud" || !host.installed) return;
-          try {
-            const result = await scoped.call(network.id, role, "inventory");
-            const remote = result
-              .find((n) => n.id === network.id)
-              ?.nodes.find((n) => n.nodeId === nodeId || (nodeId === role && !n.nodeId && n.role === role));
-            network.nodes = network.nodes.filter((n) => n.nodeId !== nodeId);
-            if (remote) network.nodes.push({ ...remote, nodeId, role, name });
-          } catch (error) {
-            network.hosts[nodeId] = { ...host, error: error.message };
-          }
-        }),
+        this.nodes
+          .deployments(network.id)
+          .map(async ({ nodeId, role, name }) => {
+            const scoped = new Hosts(
+              this.nodes.selectNode(network.id, role, nodeId),
+            );
+            const host = scoped.get(network.id, role);
+            network.hosts ||= {};
+            network.hosts[nodeId] = host;
+            if (host.kind !== "cloud" || !host.installed) return;
+            try {
+              const result = await scoped.call(network.id, role, "inventory");
+              const remote = result
+                .find((n) => n.id === network.id)
+                ?.nodes.find(
+                  (n) =>
+                    n.nodeId === nodeId ||
+                    (nodeId === role && !n.nodeId && n.role === role),
+                );
+              network.nodes = network.nodes.filter((n) => n.nodeId !== nodeId);
+              if (remote) network.nodes.push({ ...remote, nodeId, role, name });
+            } catch (error) {
+              network.hosts[nodeId] = { ...host, error: error.message };
+            }
+          }),
       ),
     );
     return networks;

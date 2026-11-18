@@ -1,3 +1,12 @@
+import {
+  pages,
+  routePath,
+  routeState,
+  navigateRoute,
+  navigatePath,
+  subscribeRoutes,
+} from "./routes.js";
+import { activityView } from "./activity.js";
 import { syncProgress } from "./progress.js";
 import { deploymentSteps, stageIds } from "./deployment-steps.js";
 const $ = (id) => document.getElementById(id);
@@ -11,56 +20,18 @@ const esc = (v) =>
   );
 const icon = (name) =>
   '<img class="glyph" alt="" src="/icons/' + name + '.svg">';
-const pages = {
-  overview: [
-    "Workspace",
-    "Overview",
-    "home",
-    "Join existing networks and manage your local or cloud nodes.",
-  ],
-  networks: [
-    "Workspace",
-    "Public networks",
-    "network",
-    "Dev, Test and Prod are loaded automatically from their public sentry APIs.",
-  ],
-  validator: [
-    "Deployments",
-    "Validator deployments",
-    "shield-check",
-    "Create and manage multiple independent private validators on the selected network.",
-  ],
-  sentry: [
-    "Deployments",
-    "Sentry deployments",
-    "server",
-    "Create and manage multiple public sentries, each with its own host and endpoints.",
-  ],
-  monitor: [
-    "Operations",
-    "Network monitor",
-    "layers",
-    "Check services, peer connections and synchronization on your deployment hosts.",
-  ],
-  settings: [
-    "Workspace",
-    "Settings",
-    "server",
-    "Choose local or cloud hosts. The network invitation fixes genesis and the runtime release.",
-  ],
-  activity: [
-    "Operations",
-    "Activity & logs",
-    "layers",
-    "Review node setup and runtime actions taken on this host.",
-  ],
-};
+
 const labels = {
   dev: "Development",
   staging: "Staging",
   production: "Production",
 };
 const actionLabels = {
+  inspect: "Inspect server",
+  status: "Check services",
+  health: "Check node health",
+  logs: "Read server logs",
+  "network-health": "Check network health",
   "workspace-update": "Network invitation updated",
   "remove-node": "Node and owned resources removed",
   "cloud-account-save": "Cloud credential saved",
@@ -85,7 +56,7 @@ let token = sessionStorage.getItem("participant-session") || "";
 if (/^#[a-f0-9]{64}$/.test(location.hash)) {
   token = location.hash.slice(1);
   sessionStorage.setItem("participant-session", token);
-  history.replaceState(null, "", location.pathname + location.search);
+  history.replaceState(history.state, "", location.pathname + location.search);
 }
 let state,
   selected,
@@ -94,36 +65,149 @@ let state,
   pending = false;
 let removalReview = null;
 const observations = new Map();
+const healthReports = new Map();
+let autoHealth = false;
+let activitySearch = "",
+  activityStatus = "all",
+  activityOperation = "all",
+  activityType = "all";
+let activitySelection = "",
+  activityLog = null,
+  activityLogTarget = "";
+let activityServer = "all",
+  activitySort = "newest",
+  activityTarget = "",
+  activityLogSearch = "";
+let activityWrap = false,
+  activityFollow = true,
+  activityHistoryOpen = false;
+let pollingJobs = false,
+  launchingJob = false;
+const backgroundActions = new Set([
+  "host",
+  "host-install",
+  "identity",
+  "prepare-validator",
+  "prepare-validator-public",
+  "prepare-sentry",
+  "connection",
+  "review",
+  "checkpoint-select",
+  "checkpoint-current",
+  "checkpoint-restore",
+  "start",
+  "stop",
+  "remove-node",
+]);
+let healthSearch = "",
+  healthRole = "all",
+  healthFilter = "all";
+const runKey = (run) =>
+  run.runId || [run.time, run.action, run.nodeId || ""].join(":");
+const runType = (action) =>
+  /^(host|cloud|ssh)/.test(action)
+    ? "infrastructure"
+    : /^(import|workspace)/.test(action)
+      ? "network"
+      : "node";
+const selectOptions = (items, value) =>
+  items
+    .map(
+      ([id, label]) =>
+        '<option value="' +
+        esc(id) +
+        '" ' +
+        (id === value ? "selected" : "") +
+        ">" +
+        esc(label) +
+        "</option>",
+    )
+    .join("");
+const filterSelect = (id, label, items, value) =>
+  '<label class="field">' +
+  label +
+  '<select id="' +
+  id +
+  '">' +
+  selectOptions(items, value) +
+  "</select></label>";
+const healthLabels = {
+  healthy: "Healthy",
+  attention: "Needs attention",
+  stale: "Needs verification",
+  unchecked: "Not checked",
+  "not-installed": "Not installed",
+};
+const healthBadge = (status) =>
+  '<span class="badge health-' +
+  esc(status) +
+  '">' +
+  esc(healthLabels[status] || status) +
+  "</span>";
+
 function workspaceNetworks() {
   const networks = state?.networks || [];
-  const publicIds = new Set((state?.workspaces || []).map((workspace) => workspace.networkId).filter(Boolean));
+  const publicIds = new Set(
+    (state?.workspaces || [])
+      .map((workspace) => workspace.networkId)
+      .filter(Boolean),
+  );
   return [
     ...(state?.workspaces || []).map((workspace) => {
-      const network = networks.find((network) => network.id === workspace.networkId);
-      return { ...(network || { nodes: [], hosts: {} }), id: "workspace-" + workspace.id,
-        networkId: network?.id || null, workspaceId: workspace.id, name: workspace.label,
-        stage: workspace.stage, api: workspace.api, invitationUrl: workspace.invitationUrl,
-        workspaceError: workspace.error, workspaceUpdate: workspace.update, checkedAt: workspace.checkedAt };
+      const network = networks.find(
+        (network) => network.id === workspace.networkId,
+      );
+      return {
+        ...(network || { nodes: [], hosts: {} }),
+        id: "workspace-" + workspace.id,
+        networkId: network?.id || null,
+        workspaceId: workspace.id,
+        name: workspace.label,
+        stage: workspace.stage,
+        api: workspace.api,
+        invitationUrl: workspace.invitationUrl,
+        workspaceError: workspace.error,
+        workspaceUpdate: workspace.update,
+        checkedAt: workspace.checkedAt,
+      };
     }),
     ...networks.filter((network) => !publicIds.has(network.id)),
   ];
 }
 const current = () => {
   const network = workspaceNetworks().find((n) => n.id === selected);
-  const nodeId = new URLSearchParams(location.search).get("node");
-  const node = network?.nodes.find((node) => node.nodeId === nodeId && node.role === page);
-  return node?.invitation ? { ...network, ...node.invitation,
-    publicPeer:node.connection?.mode === "public" ? node.connection.peer : node.invitation.publicPeer,
-    publicCheckpoint:node.publicCheckpoint } : network;
+  const nodeId = routeState().node;
+  const node = network?.nodes.find(
+    (node) => node.nodeId === nodeId && node.role === page,
+  );
+  return node?.invitation
+    ? {
+        ...network,
+        ...node.invitation,
+        publicPeer:
+          node.connection?.mode === "public"
+            ? node.connection.peer
+            : node.invitation.publicPeer,
+        publicCheckpoint: node.publicCheckpoint,
+      }
+    : network;
 };
-const selectedNodeId = () => new URLSearchParams(location.search).get("node");
-const activeNode = () => current()?.nodes.find((n) => n.role === page && n.nodeId === selectedNodeId());
+const selectedNodeId = () => routeState().node;
+const activeNode = () =>
+  current()?.nodes.find(
+    (n) => n.role === page && n.nodeId === selectedNodeId(),
+  );
 const activeHost = () => current()?.hosts?.[selectedNodeId() || page];
 const key = () => selected + ":" + page + ":" + (selectedNodeId() || "");
-async function api(action, data) {
+async function api(action, data, options = {}) {
   if (data?.id?.startsWith("workspace-")) {
-    const workspace = workspaceNetworks().find((network) => network.id === data.id);
-    if (!workspace?.networkId) throw new Error("This public workspace is unavailable. Retry its API connection before creating nodes.");
+    const workspace = workspaceNetworks().find(
+      (network) => network.id === data.id,
+    );
+    if (!workspace?.networkId)
+      throw new Error(
+        "This public workspace is unavailable. Retry its API connection before creating nodes.",
+      );
     data = { ...data, id: workspace.networkId };
   }
   if (data?.id && data.role && selectedNodeId() && !data.nodeId)
@@ -132,6 +216,7 @@ async function api(action, data) {
     method: data ? "POST" : "GET",
     headers: {
       Authorization: "Bearer " + token,
+      ...(options.background ? { Prefer: "respond-async" } : {}),
       ...(data ? { "Content-Type": "application/json" } : {}),
     },
     ...(data ? { body: JSON.stringify(data) } : {}),
@@ -179,8 +264,8 @@ const btn = (action, label, primary = false) =>
   label +
   "</button>";
 const tile = (p, desc) =>
-  '<a class="tile btn" href="?page=' +
-  p +
+  '<a class="tile btn" href="' +
+  esc(routePath({ workspace: selected, page: p })) +
   '" data-page="' +
   p +
   '"><span class="iconbox">' +
@@ -215,18 +300,43 @@ function publicWorkspaceCards() {
   return surface(
     "Public network workspaces",
     "Each public API is a separate workspace. Network identity, genesis, pinned images and sentry peer are fetched automatically; no invitation file or checksum entry is needed.",
-    '<div class="tiles">' + workspaceNetworks().filter((network) => network.workspaceId).map((network) =>
-      '<a class="tile btn" href="?page=overview&network=' + network.id + '"><div><h3>' + esc(network.name) + '</h3><p>' + esc(network.api) + '</p><p>' +
-      esc(network.workspaceUpdate ? "Network update available" : network.networkId ? network.workspaceError ? "Cached network · API unavailable" : "Ready to join" : "API unavailable") + '</p></div></a>'
-    ).join("") + '</div>',
+    '<div class="tiles">' +
+      workspaceNetworks()
+        .filter((network) => network.workspaceId)
+        .map(
+          (network) =>
+            '<a class="tile btn" href="' +
+            esc(routePath({ workspace: network.id, page: "overview" })) +
+            '"><div><h3>' +
+            esc(network.name) +
+            "</h3><p>" +
+            esc(network.api) +
+            "</p><p>" +
+            esc(
+              network.workspaceUpdate
+                ? "Network update available"
+                : network.networkId
+                  ? network.workspaceError
+                    ? "Cached network · API unavailable"
+                    : "Ready to join"
+                  : "API unavailable",
+            ) +
+            "</p></div></a>",
+        )
+        .join("") +
+      "</div>",
   );
 }
 function workspaceUnavailable(n) {
   return surface(
     esc(n.name) + " public network",
     n.api,
-    '<p role="alert">' + esc(n.workspaceError || "Network invitation has not been loaded yet.") + '</p>' +
-    '<p class="dialog-copy">The API must publish its public network invitation at ' + esc(n.invitationUrl) + '. Retry to load this workspace automatically.</p>',
+    '<p role="alert">' +
+      esc(n.workspaceError || "Network invitation has not been loaded yet.") +
+      "</p>" +
+      '<p class="dialog-copy">The API must publish its public network invitation at ' +
+      esc(n.invitationUrl) +
+      ". Retry to load this workspace automatically.</p>",
     btn("workspace-refresh", "Retry public API", true),
   );
 }
@@ -277,12 +387,15 @@ function overview(n) {
 }
 function networks(n) {
   if (!n) return importCard();
-  if (n.workspaceId && !n.networkId) return publicWorkspaceCards() + workspaceUnavailable(n);
+  if (n.workspaceId && !n.networkId)
+    return publicWorkspaceCards() + workspaceUnavailable(n);
   return (
     publicWorkspaceCards() +
     surface(
       "Network details",
-      n.workspaceId ? "Loaded automatically from this workspace’s HTTPS public sentry API." : "Verified against the invitation checksum.",
+      n.workspaceId
+        ? "Loaded automatically from this workspace’s HTTPS public sentry API."
+        : "Verified against the invitation checksum.",
       details([
         ["Stage", labels[n.stage]],
         ["Chain ID", n.chain],
@@ -290,7 +403,15 @@ function networks(n) {
         ["Release", n.release],
         ["Sentry peer", n.publicPeer || n.peer],
         ["Wallet RPC", n.rpc],
-        ["Current public checkpoint", n.publicCheckpoint?.available ? "Block " + n.publicCheckpoint.height + " · " + n.publicCheckpoint.createdAt : n.publicCheckpoint?.error || "Checking public network"],
+        [
+          "Current public checkpoint",
+          n.publicCheckpoint?.available
+            ? "Block " +
+              n.publicCheckpoint.height +
+              " · " +
+              n.publicCheckpoint.createdAt
+            : n.publicCheckpoint?.error || "Checking public network",
+        ],
       ]),
       n.workspaceId ? btn("workspace-refresh", "Refresh public network") : "",
     ) +
@@ -316,7 +437,7 @@ const step = (num, title, hint, action) =>
   "</div>";
 const badge = (s) => '<span class="badge">' + s + "</span>";
 function selectedStep(n, node) {
-  const requested = new URLSearchParams(location.search).get("step");
+  const requested = routeState().step;
   if (stageIds.includes(requested)) return stageIds.indexOf(requested);
   if (!activeHost()?.configured && !node) return 0;
   return !node?.prepared ? 1 : 2;
@@ -378,54 +499,313 @@ const providerLabels = {
 };
 function cloudAccountsCard() {
   const accounts = state.cloudAccounts?.accounts || [];
-  return surface("Cloud credentials", "Save named provider accounts to review and delete the dedicated VM and cloud resources of a removed node. Secrets stay on this computer.",
-    accounts.length ? accounts.map((account) => '<div class="row"><div><h3>' + esc(account.name) + '</h3><p>' + esc(providerLabels[account.provider]) + '</p></div><button data-action="cloud-account-edit" data-account-id="' + account.id + '">Edit</button></div>').join("") : empty("No cloud credentials saved."),
-    btn("cloud-account-open", "Add cloud credential", true));
+  return surface(
+    "Cloud credentials",
+    "Save named provider accounts to review and delete the dedicated VM and cloud resources of a removed node. Secrets stay on this computer.",
+    accounts.length
+      ? accounts
+          .map(
+            (account) =>
+              '<div class="row"><div><h3>' +
+              esc(account.name) +
+              "</h3><p>" +
+              esc(providerLabels[account.provider]) +
+              '</p></div><button data-action="cloud-account-edit" data-account-id="' +
+              account.id +
+              '">Edit</button></div>',
+          )
+          .join("")
+      : empty("No cloud credentials saved."),
+    btn("cloud-account-open", "Add cloud credential", true),
+  );
 }
 function settingsPage(n) {
-  if (!n || (n.workspaceId && !n.networkId)) return cloudAccountsCard();
-  return surface(
-    "Network & deployment settings",
-    "The public network invitation pins this workspace’s genesis and release.",
-    details([
-      ["Network ID", n.networkId || n.id],
-      ["Release", n.release],
-      ["Chain ID", n.chain],
-    ]) +
-      '<div class="tiles">' +
-      tile(
-        "validator",
-        "Configure the private validator host and public sentry connection.",
-      ) +
-      tile("sentry", "Configure the public sentry host and domain.") +
-      "</div>",
-  ) + cloudAccountsCard();
+  const tabs = [
+    ["network", "Network"],
+    ["version", "Deployment version"],
+    ["nodes", "Node hosts"],
+    ["credentials", "Credentials"],
+  ];
+  const requested = routeState().tab;
+  const tab = tabs.some(([id]) => id === requested) ? requested : "network";
+  const navigation =
+    '<nav class="settings-tabs" aria-label="Settings sections">' +
+    tabs
+      .map(
+        ([id, label]) =>
+          '<a class="btn" href="' +
+          esc(routePath({ workspace: selected, page: "settings", tab: id })) +
+          '" ' +
+          (tab === id ? 'aria-current="page"' : "") +
+          ">" +
+          label +
+          "</a>",
+      )
+      .join("") +
+    "</nav>";
+  if (tab === "credentials")
+    return (
+      navigation + '<p class="eyebrow">All workspaces</p>' + cloudAccountsCard()
+    );
+  if (!n || (n.workspaceId && !n.networkId))
+    return (
+      navigation + empty("Select an available network to view its settings.")
+    );
+  const description =
+    tab === "network"
+      ? "Configure the selected network, infrastructure and access."
+      : tab === "version"
+        ? "The verified network invitation selects the shared runtime release for new nodes."
+        : "Configure local or cloud hosts for individual nodes in this network.";
+  return (
+    navigation +
+    '<p class="eyebrow">' +
+    esc(n.name || n.stage) +
+    " workspace</p><p>" +
+    description +
+    "</p>" +
+    (tab === "nodes"
+      ? surface(
+          "Node hosts",
+          "Select a node to configure its host and access.",
+          n.nodes
+            .map(
+              (node) =>
+                '<div class="row"><div><h3>' +
+                esc(node.name || node.role) +
+                "</h3><p>" +
+                esc(n.hosts?.[node.nodeId]?.address || "Local Docker Engine") +
+                '</p></div><a class="btn" href="' +
+                esc(
+                  routePath({
+                    workspace: n.id,
+                    page: node.role,
+                    node: node.nodeId,
+                    step: "configuration",
+                  }),
+                ) +
+                '">Configure host</a></div>',
+            )
+            .join("") || empty("No nodes yet."),
+        )
+      : surface(
+          tab === "version" ? "Deployment version" : "Network settings",
+          "The public invitation pins this workspace’s genesis and release.",
+          details([
+            ["Network ID", n.networkId || n.id],
+            ["Release", n.release],
+            ["Chain ID", n.chain],
+            ["Public sentry API", n.api || "Imported invitation"],
+          ]) +
+            (tab === "network"
+              ? '<div class="tiles">' +
+                tile(
+                  "validator",
+                  "Configure private validator hosts and public sentry connections.",
+                ) +
+                tile("sentry", "Configure public sentry hosts and domains.") +
+                "</div>"
+              : "<p>Existing nodes retain their pinned release. Review available invitation updates before creating new nodes.</p>"),
+        ))
+  );
+}
+function healthNodeState(row) {
+  return row?.checkedAt && Date.now() - Date.parse(row.checkedAt) > 60000
+    ? "stale"
+    : row?.status || "unchecked";
 }
 function monitorPage(n) {
   if (!n) return importCard();
-  return surface(
-    "Node deployments",
-    "Open a node to inspect its live services, block height and connected upstream peer.",
-    n.nodes.length
-      ? n.nodes
+  const report = healthReports.get(n.networkId || n.id);
+  const stale = report && Date.now() - Date.parse(report.checkedAt) > 60000;
+  const overall = !report
+    ? "unchecked"
+    : stale
+      ? "stale"
+      : report.checks.every((c) => c.status === "healthy")
+        ? "healthy"
+        : "attention";
+  const rows = n.nodes.map((node) => ({
+    node,
+    observation: report?.nodes.find((row) => row.nodeId === node.nodeId),
+  }));
+  const visible = rows.filter(({ node, observation }) => {
+    const status = healthNodeState(observation);
+    return (
+      (healthRole === "all" || node.role === healthRole) &&
+      (healthFilter === "all" ||
+        (healthFilter === "attention"
+          ? ["attention", "stale"].includes(status)
+          : healthFilter === "pending"
+            ? ["unchecked", "not-installed"].includes(status)
+            : status === healthFilter)) &&
+      [
+        node.name,
+        node.nodeId,
+        n.hosts?.[node.nodeId]?.address,
+        n.hosts?.[node.nodeId]?.provider,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(healthSearch.toLowerCase())
+    );
+  });
+  const consensus = report?.checks.find((c) => c.label === "Consensus");
+  return (
+    surface(
+      "Public network health",
+      "Check the expected network, recent consensus blocks and public API responses.",
+      healthBadge(overall) +
+        '<p role="status">' +
+        (report
+          ? "Observed " + esc(new Date(report.checkedAt).toLocaleString())
+          : "No completed gateway check") +
+        " · " +
+        (autoHealth
+          ? "Automatic checks every 30 seconds"
+          : "Automatic checks paused") +
+        "</p>",
+      btn(
+        "health-auto",
+        autoHealth ? "Pause auto checks" : "Resume auto checks",
+      ) + btn("network-health", "Check now", true),
+    ) +
+    '<div class="health-metrics">' +
+    [
+      ["Consensus height", consensus?.height ?? "—"],
+      [
+        "Consensus response",
+        consensus?.latencyMs === undefined ? "—" : consensus.latencyMs + " ms",
+      ],
+      [
+        "Healthy nodes",
+        rows.filter((r) => healthNodeState(r.observation) === "healthy")
+          .length +
+          " / " +
+          rows.length,
+      ],
+      [
+        "Nodes needing attention",
+        rows.filter((r) =>
+          ["attention", "stale"].includes(healthNodeState(r.observation)),
+        ).length,
+      ],
+    ]
+      .map(
+        ([label, value]) =>
+          '<div class="surface metric"><p>' +
+          label +
+          "</p><strong>" +
+          esc(value) +
+          "</strong></div>",
+      )
+      .join("") +
+    "</div>" +
+    surface(
+      "Public gateway checks",
+      "Expected network: graphene-" + esc(n.stage) + "-" + esc(n.chain),
+      report
+        ? '<div class="health-checks">' +
+            report.checks
+              .map(
+                (check) =>
+                  '<div class="check-card"><h3>' +
+                  esc(check.label) +
+                  " " +
+                  healthBadge(stale ? "stale" : check.status) +
+                  "</h3><p>" +
+                  esc(
+                    check.message ||
+                      (check.status === "healthy"
+                        ? "Expected network verified."
+                        : "Check block freshness and synchronization."),
+                  ) +
+                  "</p><code>" +
+                  esc(check.url) +
+                  "</code>" +
+                  details([
+                    ["Block height", check.height ?? "—"],
+                    [
+                      "Response",
+                      check.latencyMs === undefined
+                        ? "—"
+                        : check.latencyMs + " ms",
+                    ],
+                  ]) +
+                  "</div>",
+              )
+              .join("") +
+            "</div><p>Block freshness warns after 120 seconds. These checks do not prove validator quorum or P2P port reachability.</p>"
+        : empty(
+            "Run checks to verify the public consensus endpoint and sentry API.",
+          ),
+    ) +
+    surface(
+      "Node health",
+      "Validators use the configured private Docker or SSH connection. Installation alone does not mark a node healthy.",
+      '<div class="filter-bar"><label class="field">Find a node<input id="health-search" type="search" placeholder="Name, host or provider" value="' +
+        esc(healthSearch) +
+        '"></label>' +
+        filterSelect(
+          "health-role",
+          "Role",
+          [
+            ["all", "All roles"],
+            ["validator", "Validators"],
+            ["sentry", "Sentries"],
+          ],
+          healthRole,
+        ) +
+        filterSelect(
+          "health-filter",
+          "Health",
+          [
+            ["all", "All states"],
+            ["healthy", "Healthy"],
+            ["attention", "Needs attention"],
+            ["pending", "Not checked / installed"],
+          ],
+          healthFilter,
+        ) +
+        '</div><div class="table-scroll"><table class="health-table"><caption class="sr-only">Node health observations</caption><thead><tr><th>Node</th><th>Provider / host</th><th>Health</th><th>Block height</th><th>Last observation</th><th>Manage</th></tr></thead><tbody>' +
+        visible
           .map(
-            (node) =>
-              '<div class="row"><div><h3>' +
+            ({ node, observation }) =>
+              "<tr><td><strong>" +
+              esc(node.name || node.role) +
+              "</strong><p>" +
+              esc(node.role) +
+              "</p></td><td>" +
+              esc(providerLabels[n.hosts?.[node.nodeId]?.provider] || "Local") +
+              "<p>" +
+              esc(n.hosts?.[node.nodeId]?.address || "Docker Engine") +
+              "</p></td><td>" +
+              healthBadge(healthNodeState(observation)) +
+              "<p>" +
+              esc(observation?.message || "") +
+              "</p></td><td>" +
+              esc(observation?.health?.height ?? "—") +
+              "</td><td>" +
               esc(
-                node.name || (node.role === "validator" ? "Private validator" : "Public sentry"),
+                observation?.checkedAt
+                  ? new Date(observation.checkedAt).toLocaleTimeString()
+                  : "Not checked",
               ) +
-              "</h3><p>" +
-              esc(n.hosts?.[node.nodeId]?.address || "Local Docker Engine") +
-              " · " +
-              esc(node.identity?.node_id || "Identity incomplete") +
-              '</p></div><a class="btn" href="?page=' +
-              node.role +
-              "&network=" +
-              n.id +
-              '&node=' + node.nodeId + '&step=' + (node.prepared ? 'monitor' : 'host') + '">Open node</a></div>',
+              '</td><td><a class="btn" href="' +
+              esc(
+                routePath({
+                  workspace: n.id,
+                  page: node.role,
+                  node: node.nodeId,
+                  step: "monitor",
+                }),
+              ) +
+              '">Manage</a></td></tr>',
           )
-          .join("")
-      : empty("Prepare a deployment first."),
+          .join("") +
+        "</tbody></table></div>" +
+        (!visible.length ? empty("No nodes match these filters.") : ""),
+    )
   );
 }
 function nodeList(n) {
@@ -433,15 +813,53 @@ function nodeList(n) {
   const plural = page === "validator" ? "validators" : "sentries";
   return surface(
     page === "validator" ? "Validator nodes" : "Sentry nodes",
-    nodes.length + " " + plural + " on this network. Every node has its own host, identity, data and service controls.",
-    nodes.length ? nodes.map((node) => {
-      const host = n.hosts?.[node.nodeId];
-      return '<div class="row"><div><h3>' + esc(node.name) + '</h3><p>' +
-        esc(host?.kind === "cloud" ? (providerLabels[host.provider] || host.provider) + " · " + host.address : "Local Docker Engine") +
-        ' · ' + esc(node.prepared ? "Prepared" : node.identity ? "Identity created" : "Setup pending") +
-        '</p></div><div class="buttons left"><a class="btn" href="?page=' + page + '&network=' + n.id + '&node=' + node.nodeId + '">Manage node</a><button class="danger" data-action="remove-node" data-node-id="' + node.nodeId + '">Remove node</button></div></div>';
-    }).join("") : empty("No " + plural + " yet. Create a node to choose its host and begin setup."),
-    btn("create-node", page === "validator" ? "New validator" : "New sentry", true),
+    nodes.length +
+      " " +
+      plural +
+      " on this network. Every node has its own host, identity, data and service controls.",
+    nodes.length
+      ? nodes
+          .map((node) => {
+            const host = n.hosts?.[node.nodeId];
+            return (
+              '<div class="row"><div><h3>' +
+              esc(node.name) +
+              "</h3><p>" +
+              esc(
+                host?.kind === "cloud"
+                  ? (providerLabels[host.provider] || host.provider) +
+                      " · " +
+                      host.address
+                  : "Local Docker Engine",
+              ) +
+              " · " +
+              esc(
+                node.prepared
+                  ? "Prepared"
+                  : node.identity
+                    ? "Identity created"
+                    : "Setup pending",
+              ) +
+              '</p></div><div class="buttons left"><a class="btn" href="' +
+              esc(routePath({ workspace: n.id, page, node: node.nodeId })) +
+              '">Manage node</a><button data-action="server-inspect" data-node-id="' +
+              node.nodeId +
+              '">Inspect server</button><button class="danger" data-action="remove-node" data-node-id="' +
+              node.nodeId +
+              '">Remove node</button></div></div>'
+            );
+          })
+          .join("")
+      : empty(
+          "No " +
+            plural +
+            " yet. Create a node to choose its host and begin setup.",
+        ),
+    btn(
+      "create-node",
+      page === "validator" ? "New validator" : "New sentry",
+      true,
+    ),
   );
 }
 function rolePage(n) {
@@ -593,7 +1011,11 @@ function rolePage(n) {
       details([
         [
           "Invitation API",
-          "http://" + node.connection.domain + ":" + (node.connection.rpcPort || 26657) + "/api/invitation",
+          "http://" +
+            node.connection.domain +
+            ":" +
+            (node.connection.rpcPort || 26657) +
+            "/api/invitation",
         ],
         ["Invitation SHA-256", node.invitationFingerprint],
       ]),
@@ -622,13 +1044,15 @@ function rolePage(n) {
                 node.identity.node_id +
                   "@" +
                   (node.connection?.domain || "your-domain") +
-                  ":" + (node.connection?.p2pPort || 26656),
+                  ":" +
+                  (node.connection?.p2pPort || 26656),
               ],
               [
                 "Read-only RPC",
                 "http://" +
                   (node.connection?.domain || "your-domain") +
-                  ":" + (node.connection?.rpcPort || 26657),
+                  ":" +
+                  (node.connection?.rpcPort || 26657),
               ],
             ],
       ),
@@ -698,10 +1122,23 @@ function rolePage(n) {
               ["Restore", node.restore?.phase || "Ready to restore"],
             ])
           : n.publicCheckpoint?.available
-            ? details([["Current public block", n.publicCheckpoint.height], ["Published", n.publicCheckpoint.createdAt], ["Publisher", n.publicCheckpoint.fingerprint]])
-            : '<p>' + esc(n.publicCheckpoint?.error || "Checking the public network for a current checkpoint.") + '</p>',
+            ? details([
+                ["Current public block", n.publicCheckpoint.height],
+                ["Published", n.publicCheckpoint.createdAt],
+                ["Publisher", n.publicCheckpoint.fingerprint],
+              ])
+            : "<p>" +
+              esc(
+                n.publicCheckpoint?.error ||
+                  "Checking the public network for a current checkpoint.",
+              ) +
+              "</p>",
         (!node.restore && n.publicCheckpoint?.available
-          ? btn("checkpoint-current", cp ? "Use current public checkpoint" : "Use public checkpoint", true)
+          ? btn(
+              "checkpoint-current",
+              cp ? "Use current public checkpoint" : "Use public checkpoint",
+              true,
+            )
           : "") +
           (cp && node.restore?.phase !== "complete"
             ? btn(
@@ -733,6 +1170,7 @@ function rolePage(n) {
         '<div class="buttons left">' +
         btn("start", "Start node", true) +
         btn("stop", "Stop node") +
+        btn("server-inspect", "Inspect server") +
         btn("status", "Check services") +
         btn("health", "Check node health") +
         btn("logs", "View node logs") +
@@ -803,51 +1241,147 @@ function rolePage(n) {
   return navigation + html;
 }
 function activity(n) {
-  const items = state.activity.filter((a) => !n || (n.networkId || n.id) === a.id);
-  return surface(
-    "Recent actions",
-    "Most recent first · " + (n ? "Selected network" : "All networks"),
-    items.length
-      ? items
-          .map(
-            (a) =>
-              '<div class="row"><div><h3>' +
-              esc(actionLabels[a.action] || a.action) +
-              "</h3><p>" +
-              esc(
-                [a.role, a.nodeId, a.ok ? "Completed" : "Failed"]
-                  .filter(Boolean)
-                  .join(" · "),
-              ) +
-              '</p></div><time class="activity-time">' +
-              esc(new Date(a.time).toLocaleString()) +
-              "</time></div>",
-          )
-          .join("")
-      : empty("No actions recorded yet."),
+  const networkId = n?.networkId || n?.id;
+  return activityView({
+    jobs: (state.jobs || []).filter(
+      (job) => !networkId || job.networkId === networkId || !job.networkId,
+    ),
+    nodes: n?.nodes || [],
+    networkId: n?.id || "",
+    selected: activitySelection,
+    filters: {
+      search: activitySearch,
+      status: activityStatus,
+      type: activityType,
+      operation: activityOperation,
+      server: activityServer,
+      sort: activitySort,
+      target: activityTarget,
+    },
+    log: activityLog,
+    labels: actionLabels,
+    logSearch: activityLogSearch,
+    wrap: activityWrap,
+    follow: activityFollow,
+    historyOpen: activityHistoryOpen,
+  });
+}
+async function launchJob(action, body) {
+  if (launchingJob) return;
+  launchingJob = true;
+  try {
+    const response = await api(action, body, { background: true });
+    if (!response.job)
+      throw new Error(
+        "Restart the node console to enable background jobs, then retry.",
+      );
+    const job = response.job;
+    state.jobs = [
+      job,
+      ...(state.jobs || []).filter((item) => item.id !== job.id),
+    ];
+    state.busy = job.status === "running";
+    activitySelection = job.id;
+    activityLog = null;
+    activityLogSearch = "";
+    pending = false;
+    if ($("dialog").open) $("dialog").close();
+    go("activity", { run: job.id });
+    feedback(
+      job.status === "running"
+        ? "Run started. Output is saved with this activity."
+        : "Run " + job.status + ". Output is saved with this activity.",
+    );
+    void pollJobs();
+  } finally {
+    launchingJob = false;
+  }
+}
+function selectedJob() {
+  const n = current(),
+    id = n?.networkId || n?.id;
+  const jobs = (state.jobs || []).filter(
+    (job) => !id || job.networkId === id || !job.networkId,
   );
+  return activitySelection
+    ? jobs.find((job) => job.id === activitySelection)
+    : jobs[0];
+}
+async function pollJobs(force = false) {
+  if (!state || pollingJobs || !token) return;
+  pollingJobs = true;
+  try {
+    const before = new Map(
+      (state.jobs || []).map((job) => [job.id, job.status]),
+    );
+    const previous = new Map((state.jobs || []).map((job) => [job.id, job]));
+    state.jobs = (await api("jobs")).map((job) => ({
+      ...previous.get(job.id),
+      ...job,
+    }));
+    const finished = state.jobs.some(
+      (job) => before.get(job.id) === "running" && job.status !== "running",
+    );
+    state.busy = state.jobs.some((job) => job.status === "running");
+    const job = selectedJob();
+    if (
+      page === "activity" &&
+      job &&
+      (force ||
+        activityLog?.id !== job.id ||
+        job.status === "running" ||
+        activityLog?.status !== job.status)
+    ) {
+      try {
+        const [detail, logs] = await Promise.all([
+          api("jobs/" + job.id),
+          api("jobs/" + job.id + "/logs"),
+        ]);
+        state.jobs = state.jobs.map((item) =>
+          item.id === job.id ? detail : item,
+        );
+        activityLog = { ...logs, id: job.id, status: job.status };
+      } catch (error) {
+        activityLog = {
+          ...(activityLog?.id === job.id ? activityLog : {}),
+          id: job.id,
+          error: error.message,
+        };
+      }
+    }
+    if (finished) {
+      const detailed = state.jobs;
+      await refresh();
+      state.jobs = detailed;
+      if (job)
+        feedback(
+          "Run " +
+            job.status.replaceAll("-", " ") +
+            ". Output is saved with this activity.",
+        );
+    }
+    if (page === "activity") {
+      const active = document.activeElement;
+      if (!["INPUT", "SELECT"].includes(active?.tagName)) {
+        const output = $("activity-output"),
+          scroll = output?.scrollTop;
+        render();
+        if ($("activity-output"))
+          $("activity-output").scrollTop = activityFollow
+            ? $("activity-output").scrollHeight
+            : scroll || 0;
+      }
+    } else if (finished) render();
+  } catch (error) {
+    if (page === "activity")
+      feedback("Could not refresh activity: " + error.message);
+  } finally {
+    pollingJobs = false;
+  }
 }
 function render() {
   const n = current(),
     p = pages[page];
-  $("nav").innerHTML = Object.entries(pages)
-    .map(
-      ([id, [category, name, img]], i, all) =>
-        (!i || all[i - 1][1][0] !== category
-          ? '<p class="eyebrow">' + category + "</p>"
-          : "") +
-        '<a href="?page=' +
-        id +
-        '" data-page="' +
-        id +
-        '" ' +
-        (page === id ? 'aria-current="page"' : "") +
-        ">" +
-        icon(img) +
-        name +
-        "</a>",
-    )
-    .join("");
   $("network").innerHTML = workspaceNetworks().length
     ? workspaceNetworks()
         .map(
@@ -857,7 +1391,8 @@ function render() {
             '">' +
             esc(
               (labels[item.stage] || item.name) +
-                (!item.workspaceId && workspaceNetworks().some(
+                (!item.workspaceId &&
+                workspaceNetworks().some(
                   (other) =>
                     other.id !== item.id &&
                     other.chain === item.chain &&
@@ -888,71 +1423,120 @@ function render() {
             : page === "monitor"
               ? monitorPage(n)
               : (selectedNodeId() && activeNode()
-                ? surface(esc(activeNode().name), "Manage only this node’s host, identity and services.", "", btn("all-nodes", "All " + (page === "validator" ? "validators" : "sentries")) + btn("create-node", page === "validator" ? "New validator" : "New sentry") + '<button class="danger" data-action="remove-node">Remove node</button>')
-                : "") + rolePage(n);
+                  ? surface(
+                      esc(activeNode().name),
+                      "Manage only this node’s host, identity and services.",
+                      "",
+                      btn(
+                        "all-nodes",
+                        "All " +
+                          (page === "validator" ? "validators" : "sentries"),
+                      ) +
+                        btn(
+                          "create-node",
+                          page === "validator" ? "New validator" : "New sentry",
+                        ) +
+                        '<button class="danger" data-action="remove-node">Remove node</button>',
+                    )
+                  : "") + rolePage(n);
   if (n?.workspaceUpdate) {
     const update = n.workspaceUpdate;
-    $("content").insertAdjacentHTML("afterbegin", surface(
-      "Network update available",
-      "Installed release " + esc(update.currentRelease) + " · API release " + esc(update.release),
-      '<p class="dialog-copy">Update the workspace invitation for new nodes. Existing nodes keep their pinned release, identity, data and service configuration.</p>' +
-      (update.networkChanged ? '<p role="alert">The API advertises a different frozen network. It cannot replace the network of your existing nodes.</p>' : ""),
-      update.networkChanged ? "" : btn("workspace-update", "Update network", true),
-    ));
+    $("content").insertAdjacentHTML(
+      "afterbegin",
+      surface(
+        "Network update available",
+        "Installed release " +
+          esc(update.currentRelease) +
+          " · API release " +
+          esc(update.release),
+        '<p class="dialog-copy">Update the workspace invitation for new nodes. Existing nodes keep their pinned release, identity, data and service configuration.</p>' +
+          (update.networkChanged
+            ? '<p role="alert">The API advertises a different frozen network. It cannot replace the network of your existing nodes.</p>'
+            : ""),
+        update.networkChanged
+          ? ""
+          : btn("workspace-update", "Update network", true),
+      ),
+    );
   }
-  if (n?.workspaceId && !n.networkId && !["networks","settings"].includes(page)) {
+  if (
+    n?.workspaceId &&
+    !n.networkId &&
+    !["networks", "settings", "activity"].includes(page)
+  ) {
     $("content").innerHTML = workspaceUnavailable(n);
   } else if (n?.workspaceId && n.workspaceError && page !== "networks") {
-    $("content").insertAdjacentHTML("afterbegin", surface("Public API unavailable", "Your saved nodes and last verified network remain available.", '<p role="alert">' + esc(n.workspaceError) + '</p>', btn("workspace-refresh", "Retry public API")));
+    $("content").insertAdjacentHTML(
+      "afterbegin",
+      surface(
+        "Public API unavailable",
+        "Your saved nodes and last verified network remain available.",
+        '<p role="alert">' + esc(n.workspaceError) + "</p>",
+        btn("workspace-refresh", "Retry public API"),
+      ),
+    );
   }
   for (const b of $("content").querySelectorAll("button"))
-    b.disabled = pending || state.busy;
+    b.disabled =
+      b.disabled ||
+      ((pending || state.busy) &&
+        !b.dataset.action?.startsWith("activity-") &&
+        ![
+          "activity-select",
+          "activity-reset",
+          "activity-copy",
+          "activity-download",
+          "health-auto",
+        ].includes(b.dataset.action));
 }
-function setRoute(push = true) {
-  const url = new URL(location.href);
-  url.searchParams.set("page", page);
-  if (selected) url.searchParams.set("network", selected);
-  else url.searchParams.delete("network");
-  history[push ? "pushState" : "replaceState"](null, "", url);
+function setRoute(push = true, patch = {}) {
+  navigateRoute(
+    { ...routeState(), workspace: selected, page, ...patch },
+    { replace: !push },
+  );
 }
 function route() {
-  const q = new URLSearchParams(location.search);
-  page = Object.hasOwn(pages, q.get("page"))
-    ? q.get("page")
+  const requested = routeState();
+  page = Object.hasOwn(pages, requested.page)
+    ? requested.page
     : state.defaultPage;
+  activitySelection = page === "activity" ? requested.run || "" : "";
   const id =
-    q.get("network") || localStorage.getItem("graphene-participant-network");
-  selected = workspaceNetworks().some((n) => n.id === id)
+    requested.workspace || localStorage.getItem("graphene-participant-network");
+  selected = workspaceNetworks().some((network) => network.id === id)
     ? id
     : workspaceNetworks()[0]?.id;
+  if (
+    selected &&
+    (!requested.workspace ||
+      requested.workspace !== selected ||
+      requested.page !== page)
+  ) {
+    setRoute(false, { node: undefined, step: undefined, run: undefined });
+  }
   render();
 }
-function go(p) {
+function go(p, patch = {}) {
   page = p;
-  const clean = new URL(location.href);
-  clean.searchParams.delete("step");
-  clean.searchParams.delete("node");
-  history.replaceState(null, "", clean);
-  setRoute();
+  navigateRoute({ workspace: selected, page: p, ...patch });
   feedback();
   if (document.body.classList.contains("nav-open")) menu(false);
   render();
   $("title").focus();
 }
-window.addEventListener("popstate", () => {
+subscribeRoutes(() => {
   if (state) {
+    const closeNavigation = document.body.classList.contains("nav-open");
+    if (closeNavigation) menu(false);
     feedback();
     route();
+    if (closeNavigation) $("title").focus();
   }
 });
 $("network").onchange = () => {
   selected = $("network").value;
   localStorage.setItem("graphene-participant-network", selected);
-  const url = new URL(location.href);
-  url.searchParams.delete("node");
-  url.searchParams.delete("step");
-  history.replaceState(null, "", url);
-  setRoute();
+  navigateRoute({ workspace: selected, page });
   feedback();
   render();
 };
@@ -998,57 +1582,201 @@ const field = (
   (help ? "<small>" + help + "</small>" : "") +
   "</label>";
 function fieldHelp(text) {
-  return '<details class="field-help"><summary aria-label="Field help">?</summary><p>' + esc(text) + '</p></details>';
+  return (
+    '<details class="field-help"><summary aria-label="Field help">?</summary><p>' +
+    esc(text) +
+    "</p></details>"
+  );
 }
 function credentialForm(provider = "hetzner", editing = null) {
   formAction = "cloud-account-save";
   const specs = state.cloudAccounts?.providers || {};
   $("dialog-category").textContent = "Cloud credentials";
-  $("dialog-title").textContent = editing ? "Edit cloud credential" : "Add cloud credential";
+  $("dialog-title").textContent = editing
+    ? "Edit cloud credential"
+    : "Add cloud credential";
   $("form-error").textContent = "";
-  $("fields").innerHTML = '<p class="dialog-copy">Use a provider account allowed to inspect and delete this node’s VM, disks, snapshots and dedicated network resources. Blank fields preserve saved values when editing.</p>' +
-    (editing ? '<input type="hidden" name="id" value="' + editing.id + '">' : "") +
-    '<label class="field">Provider<select id="account-provider" name="provider" ' + (editing ? "disabled" : "") + '>' + Object.entries(specs).map(([key,spec]) => '<option value="' + key + '" ' + (key===provider?"selected":"") + '>' + esc(spec.name) + '</option>').join("") + '</select></label>' +
-    field("name", "Credential name", "text", "Choose a unique name for this provider account.", 'maxlength="80" value="' + esc(editing?.name || "") + '"') +
+  $("fields").innerHTML =
+    '<p class="dialog-copy">Use a provider account allowed to inspect and delete this node’s VM, disks, snapshots and dedicated network resources. Blank fields preserve saved values when editing.</p>' +
+    (editing
+      ? '<input type="hidden" name="id" value="' + editing.id + '">'
+      : "") +
+    '<label class="field">Provider<select id="account-provider" name="provider" ' +
+    (editing ? "disabled" : "") +
+    ">" +
+    Object.entries(specs)
+      .map(
+        ([key, spec]) =>
+          '<option value="' +
+          key +
+          '" ' +
+          (key === provider ? "selected" : "") +
+          ">" +
+          esc(spec.name) +
+          "</option>",
+      )
+      .join("") +
+    "</select></label>" +
+    field(
+      "name",
+      "Credential name",
+      "text",
+      "Choose a unique name for this provider account.",
+      'maxlength="80" value="' + esc(editing?.name || "") + '"',
+    ) +
     '<button type="button" id="account-name-generate">Generate name</button>' +
-    (specs[provider]?.fields || []).map((key) => {
-      const optional = key.endsWith("?"); key=key.replace("?", "");
-      const label = ({token:"API token",accessKeyId:"AWS access key ID",secretAccessKey:"AWS secret access key",sessionToken:"AWS session token (optional)",serviceAccountJson:"Service account JSON",tenantId:"Tenant ID",subscriptionId:"Subscription ID",clientId:"Client ID",clientSecret:"Client secret"})[key] || key;
-      const help="Use the value issued by your cloud provider. This cannot be generated by the node console. Credentials are saved privately and never returned to this form.";
-      return (key==="serviceAccountJson" ? '<label class="field">' + label + '<textarea name="' + key + '" autocomplete="off" spellcheck="false" ' + (!editing?"required":"") + '></textarea></label>' : field(key,label,["tenantId","subscriptionId","clientId"].includes(key)?"text":"password", "", 'autocomplete="off" spellcheck="false"',!editing&&!optional)) + fieldHelp(help);
-    }).join("") + (provider === "aws" && editing ? '<label class="field"><input type="checkbox" name="clearSessionToken"> Clear the saved optional AWS session token</label>' : "");
+    (specs[provider]?.fields || [])
+      .map((key) => {
+        const optional = key.endsWith("?");
+        key = key.replace("?", "");
+        const label =
+          {
+            token: "API token",
+            accessKeyId: "AWS access key ID",
+            secretAccessKey: "AWS secret access key",
+            sessionToken: "AWS session token (optional)",
+            serviceAccountJson: "Service account JSON",
+            tenantId: "Tenant ID",
+            subscriptionId: "Subscription ID",
+            clientId: "Client ID",
+            clientSecret: "Client secret",
+          }[key] || key;
+        const help =
+          "Use the value issued by your cloud provider. This cannot be generated by the node console. Credentials are saved privately and never returned to this form.";
+        return (
+          (key === "serviceAccountJson"
+            ? '<label class="field">' +
+              label +
+              '<textarea name="' +
+              key +
+              '" autocomplete="off" spellcheck="false" ' +
+              (!editing ? "required" : "") +
+              "></textarea></label>"
+            : field(
+                key,
+                label,
+                ["tenantId", "subscriptionId", "clientId"].includes(key)
+                  ? "text"
+                  : "password",
+                "",
+                'autocomplete="off" spellcheck="false"',
+                !editing && !optional,
+              )) + fieldHelp(help)
+        );
+      })
+      .join("") +
+    (provider === "aws" && editing
+      ? '<label class="field"><input type="checkbox" name="clearSessionToken"> Clear the saved optional AWS session token</label>'
+      : "");
   $("submit").textContent = "Save credential";
-  $("account-provider").onchange = () => credentialForm($("account-provider").value);
-  $("account-name-generate").onclick = () => { $("fields").querySelector('[name="name"]').value = (specs[provider]?.name || provider) + "-" + crypto.randomUUID().slice(0,8); };
+  $("account-provider").onchange = () =>
+    credentialForm($("account-provider").value);
+  $("account-name-generate").onclick = () => {
+    $("fields").querySelector('[name="name"]').value =
+      (specs[provider]?.name || provider) +
+      "-" +
+      crypto.randomUUID().slice(0, 8);
+  };
   $("dialog").showModal();
 }
 function removalForm() {
   removalReview = null;
   formAction = "remove-preview";
-  const node = activeNode(), host = activeHost();
+  const node = activeNode(),
+    host = activeHost();
   $("dialog-category").textContent = "Node removal";
   $("dialog-title").textContent = "Remove " + node.name;
   $("form-error").textContent = "";
-  $("fields").innerHTML = '<p class="dialog-copy">This permanently removes this node’s containers, volumes, keys, data, checkpoint files and local configuration. A cloud node also removes its verified dedicated VM and the associated resources listed in the review.</p>' +
-    (page==="validator" ? '<p class="dialog-copy">This stops validator participation. On-chain registration and stake must be managed separately in your wallet.</p>' : "") +
-    (host?.kind === "cloud" ? '<label class="field">Cloud host ownership<select id="removal-cloud-mode" name="cloudMode"><option value="dedicated">Delete a dedicated VM and its associated resources</option><option value="shared">Remove this node from a shared host; keep the VM</option></select></label>' + fieldHelp("Delete the VM only when it belongs exclusively to this node. A shared VM is retained while this node’s containers and data are removed over SSH.") + '<label class="field">' + esc(providerLabels[host.provider]) + ' credential<select name="credentialId" required><option value="">Choose a saved provider credential</option>' + (state.cloudAccounts?.accounts||[]).filter(account=>account.provider===host.provider).map(account=>'<option value="'+account.id+'">'+esc(account.name)+'</option>').join("") + '</select></label>' + fieldHelp("Only saved credentials for this node’s cloud provider can be selected. Add or edit an account in Settings → Cloud credentials.") + '<label class="field"><input type="checkbox" name="dedicated" required> This VM is dedicated to this node and may be permanently deleted.</label><p class="dialog-copy">Removal is blocked if other nodes or containers are detected on this VM.</p>' : "");
-  if(host?.kind === "cloud") $("removal-cloud-mode").onchange = () => {
-    const dedicated = $("removal-cloud-mode").value === "dedicated";
-    const account = $("fields").querySelector('[name="credentialId"]');
-    const confirmation = $("fields").querySelector('[name="dedicated"]');
-    account.required=dedicated;account.disabled=!dedicated;confirmation.required=dedicated;confirmation.disabled=!dedicated;
-  };
+  $("fields").innerHTML =
+    '<p class="dialog-copy">This permanently removes this node’s containers, volumes, keys, data, checkpoint files and local configuration. A cloud node also removes its verified dedicated VM and the associated resources listed in the review.</p>' +
+    (page === "validator"
+      ? '<p class="dialog-copy">This stops validator participation. On-chain registration and stake must be managed separately in your wallet.</p>'
+      : "") +
+    (host?.kind === "cloud"
+      ? '<label class="field">Cloud host ownership<select id="removal-cloud-mode" name="cloudMode"><option value="dedicated">Delete a dedicated VM and its associated resources</option><option value="shared">Remove this node from a shared host; keep the VM</option></select></label>' +
+        fieldHelp(
+          "Delete the VM only when it belongs exclusively to this node. A shared VM is retained while this node’s containers and data are removed over SSH.",
+        ) +
+        '<label class="field">' +
+        esc(providerLabels[host.provider]) +
+        ' credential<select name="credentialId" required><option value="">Choose a saved provider credential</option>' +
+        (state.cloudAccounts?.accounts || [])
+          .filter((account) => account.provider === host.provider)
+          .map(
+            (account) =>
+              '<option value="' +
+              account.id +
+              '" ' +
+              (account.id === host.credentialId ? "selected" : "") +
+              ">" +
+              esc(account.name) +
+              "</option>",
+          )
+          .join("") +
+        "</select></label>" +
+        fieldHelp(
+          "Only saved credentials for this node’s cloud provider can be selected. Add or edit an account in Settings → Cloud credentials.",
+        ) +
+        '<label class="field"><input type="checkbox" name="dedicated" required> This VM is dedicated to this node and may be permanently deleted.</label><p class="dialog-copy">Removal is blocked if other nodes or containers are detected on this VM.</p>'
+      : "");
+  if (host?.kind === "cloud")
+    $("removal-cloud-mode").onchange = () => {
+      const dedicated = $("removal-cloud-mode").value === "dedicated";
+      const account = $("fields").querySelector('[name="credentialId"]');
+      const confirmation = $("fields").querySelector('[name="dedicated"]');
+      account.required = dedicated;
+      account.disabled = !dedicated;
+      confirmation.required = dedicated;
+      confirmation.disabled = !dedicated;
+    };
   $("submit").textContent = "Review removal";
   $("dialog").showModal();
 }
 function removalDetails(plan) {
-  removalReview = plan; formAction = "remove-node";
-  $("fields").innerHTML = '<p class="dialog-copy">Permanently delete the following resources for <strong>' + esc(plan.name) + '</strong>. This cannot be undone.</p>' +
-    details([["Containers and volumes", plan.project], ["Cloud account", plan.accountName || "Not required"], ["Local files", plan.files.join("\n") || "None"], ["Remote files", plan.remoteFiles.join("\n") || "None"]]) +
-    (plan.resources.length ? '<h3>Cloud resources</h3><ul>' + plan.resources.map(resource=>'<li>'+esc(resource.type)+' · '+esc(resource.name||resource.id)+'</li>').join("") + '</ul>' : "") +
-    (plan.retained.length ? '<p class="dialog-copy">Shared resources retained: ' + esc(plan.retained.join(", ")) + '</p>' : "") +
-    (plan.resuming ? '<p class="dialog-copy">Resuming interrupted removal. Completed: ' + esc(plan.completed.join(", ") || "none") + '</p>' : "") +
-    '<p class="dialog-copy">Shared workspace data, credential profiles and shared Docker images are retained.</p><p id="removal-progress" role="status"></p>' + field("confirmation", "Type " + esc(plan.confirmation), "text", "Confirm deletion of this exact node.", 'autocomplete="off"');
+  removalReview = plan;
+  formAction = "remove-node";
+  $("fields").innerHTML =
+    '<p class="dialog-copy">Permanently delete the following resources for <strong>' +
+    esc(plan.name) +
+    "</strong>. This cannot be undone.</p>" +
+    details([
+      ["Containers and volumes", plan.project],
+      ["Cloud account", plan.accountName || "Not required"],
+      ["Local files", plan.files.join("\n") || "None"],
+      ["Remote files", plan.remoteFiles.join("\n") || "None"],
+    ]) +
+    (plan.resources.length
+      ? "<h3>Cloud resources</h3><ul>" +
+        plan.resources
+          .map(
+            (resource) =>
+              "<li>" +
+              esc(resource.type) +
+              " · " +
+              esc(resource.name || resource.id) +
+              "</li>",
+          )
+          .join("") +
+        "</ul>"
+      : "") +
+    (plan.retained.length
+      ? '<p class="dialog-copy">Shared resources retained: ' +
+        esc(plan.retained.join(", ")) +
+        "</p>"
+      : "") +
+    (plan.resuming
+      ? '<p class="dialog-copy">Resuming interrupted removal. Completed: ' +
+        esc(plan.completed.join(", ") || "none") +
+        "</p>"
+      : "") +
+    '<p class="dialog-copy">Shared workspace data, credential profiles and shared Docker images are retained.</p><p id="removal-progress" role="status"></p>' +
+    field(
+      "confirmation",
+      "Type " + esc(plan.confirmation),
+      "text",
+      "Confirm deletion of this exact node.",
+      'autocomplete="off"',
+    );
   $("submit").textContent = "Remove permanently";
 }
 function dialog(action) {
@@ -1065,13 +1793,22 @@ function dialog(action) {
       "Choose deployment host",
       "Use your local Docker Engine, or connect a prepared cloud host. No paid server is created by this action.",
       '<label class="field">Deployment target<select name="kind" id="host-kind"><option value="local">Local Docker Engine</option><option value="cloud">Cloud provider · existing host</option></select></label>' +
-        '<fieldset id="cloud-fields" hidden disabled><legend>Cloud host connection</legend><label class="field">Cloud provider<select name="provider">' +
+        '<fieldset id="cloud-fields" hidden disabled><legend>Cloud host connection</legend><label class="field">Cloud provider<select name="provider" id="host-provider">' +
         Object.entries(providerLabels)
           .map(
             ([id, name]) => '<option value="' + id + '">' + name + "</option>",
           )
           .join("") +
         "</select></label>" +
+        '<label class="field" id="host-credential-field">Saved cloud credential<select name="credentialId" id="host-credential"></select></label><p id="host-credential-help" class="dialog-copy"></p><a class="btn" href="' +
+        esc(
+          routePath({
+            workspace: selected,
+            page: "settings",
+            tab: "credentials",
+          }),
+        ) +
+        '">Manage saved credentials</a>' +
         field("address", "SSH hostname or configured alias") +
         field("user", "SSH user", "text", "", 'value="root"') +
         field(
@@ -1176,7 +1913,13 @@ function dialog(action) {
     "create-node": [
       page === "validator" ? "New validator" : "New sentry",
       "Create a separate named deployment on this network. Its keys, host, data directory and service controls belong only to this node.",
-      field("name", "Node name", "text", "Use a unique name for this role and network.", 'maxlength="80"') +
+      field(
+        "name",
+        "Node name",
+        "text",
+        "Use a unique name for this role and network.",
+        'maxlength="80"',
+      ) +
         '<div class="buttons left"><button type="button" id="node-name-generate">Generate name</button></div>',
       "Create node",
     ],
@@ -1228,8 +1971,20 @@ function dialog(action) {
         "text",
         "For local deployment, forward this node’s two ports from your router to this host. Use different ports for each sentry on the same machine.",
       ) +
-        field("p2pPort", "Public P2P port", "number", "Use a free host port; each sentry on this host needs its own port.", 'value="26656" min="1" max="65535"') +
-        field("rpcPort", "Public read-only RPC port", "number", "Use another free host port for this sentry’s invitation API and read-only RPC.", 'value="26657" min="1" max="65535"'),
+        field(
+          "p2pPort",
+          "Public P2P port",
+          "number",
+          "Use a free host port; each sentry on this host needs its own port.",
+          'value="26656" min="1" max="65535"',
+        ) +
+        field(
+          "rpcPort",
+          "Public read-only RPC port",
+          "number",
+          "Use another free host port for this sentry’s invitation API and read-only RPC.",
+          'value="26657" min="1" max="65535"',
+        ),
       "Prepare sentry",
     ],
     "checkpoint-select": [
@@ -1260,7 +2015,11 @@ function dialog(action) {
     "checkpoint-current": [
       "Use current public checkpoint",
       "Fetch the latest signed checkpoint from this network’s public HTTPS API. The signature, publisher, frozen genesis, release images and age are checked automatically. Your node’s private identity is retained.",
-      details([["Block", current()?.publicCheckpoint?.height], ["Published", current()?.publicCheckpoint?.createdAt], ["Publisher", current()?.publicCheckpoint?.fingerprint]]),
+      details([
+        ["Block", current()?.publicCheckpoint?.height],
+        ["Published", current()?.publicCheckpoint?.createdAt],
+        ["Publisher", current()?.publicCheckpoint?.fingerprint],
+      ]),
       "Verify & select",
     ],
     "checkpoint-restore": [
@@ -1304,7 +2063,9 @@ function dialog(action) {
   $("submit").textContent = data[3];
   if (action === "create-node") {
     $("node-name-generate").onclick = () => {
-      $("fields").querySelector('[name="name"]').value = (page === "validator" ? "Validator-" : "Sentry-") + crypto.randomUUID().slice(0, 8);
+      $("fields").querySelector('[name="name"]').value =
+        (page === "validator" ? "Validator-" : "Sentry-") +
+        crypto.randomUUID().slice(0, 8);
     };
   }
   if (action === "identity") {
@@ -1313,21 +2074,29 @@ function dialog(action) {
       if (pending) return;
       const bytes = new Uint8Array(32);
       crypto.getRandomValues(bytes);
-      password.value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      password.value = Array.from(bytes, (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("");
       password.dispatchEvent(new Event("input", { bubbles: true }));
-      $("passphrase-status").textContent = "Passphrase generated. Use Show passphrase to copy it into your password manager before creating the identity.";
+      $("passphrase-status").textContent =
+        "Passphrase generated. Use Show passphrase to copy it into your password manager before creating the identity.";
     };
     $("passphrase-show").onclick = () => {
       if (pending) return;
       const show = password.type === "password";
       password.type = show ? "text" : "password";
-      $("passphrase-show").textContent = show ? "Hide passphrase" : "Show passphrase";
+      $("passphrase-show").textContent = show
+        ? "Hide passphrase"
+        : "Show passphrase";
       $("passphrase-show").setAttribute("aria-pressed", String(show));
     };
     $("passphrase-help").onclick = () => {
       const explanation = $("passphrase-explanation");
       explanation.hidden = !explanation.hidden;
-      $("passphrase-help").setAttribute("aria-expanded", String(!explanation.hidden));
+      $("passphrase-help").setAttribute(
+        "aria-expanded",
+        String(!explanation.hidden),
+      );
     };
   }
   if (action === "host") {
@@ -1361,6 +2130,45 @@ function dialog(action) {
         $("ssh-generate").disabled = $("ssh-trust").disabled = false;
       }
     };
+    const updateCredentials = () => {
+      const provider = $("host-provider").value;
+      const accounts = (state.cloudAccounts?.accounts || []).filter(
+        (account) => account.provider === provider,
+      );
+      const supported = provider !== "other";
+      $("host-credential-field").hidden = !supported;
+      $("host-credential").disabled = !supported;
+      $("host-credential").innerHTML = selectOptions(
+        [
+          ["", "No credential selected"],
+          ...accounts.map((account) => [account.id, account.name]),
+        ],
+        "",
+      );
+      $("host-credential-help").textContent = !supported
+        ? "This provider uses your SSH connection."
+        : accounts.length
+          ? "Select a saved provider account for this host’s cloud resource management. SSH access is configured separately."
+          : "No credentials saved for this provider. Add an account in Settings → Credentials, or configure SSH now and select credentials during removal.";
+      const previous = activeHost();
+      if (
+        previous?.provider === provider &&
+        accounts.some((a) => a.id === previous.credentialId)
+      )
+        $("host-credential").value = previous.credentialId;
+    };
+    const previous = activeHost();
+    if (previous?.kind === "cloud") {
+      $("host-kind").value = "cloud";
+      $("cloud-fields").hidden = false;
+      $("cloud-fields").disabled = false;
+      $("host-provider").value = previous.provider;
+      for (const name of ["address", "user", "port", "key", "knownHosts"])
+        $("fields").querySelector('[name="' + name + '"]').value =
+          previous[name] || "";
+    }
+    $("host-provider").onchange = updateCredentials;
+    updateCredentials();
     $("ssh-generate").onclick = () => sshAction("ssh-generate");
     $("ssh-trust").onclick = () => sshAction("ssh-trust");
     $("host-kind").onchange = () => {
@@ -1383,27 +2191,100 @@ $("form").onsubmit = async (e) => {
   if (pending) return;
   const data = new FormData(e.target),
     action = formAction;
+  if (
+    ["activity-cancel", "activity-delete", "activity-clear"].includes(action)
+  ) {
+    const job = selectedJob(),
+      network = current()?.networkId || current()?.id;
+    const route =
+      action === "activity-clear"
+        ? "jobs?completed=true&network=" + encodeURIComponent(network)
+        : "jobs/" + job.id + (action === "activity-cancel" ? "/cancel" : "");
+    $("submit").disabled = true;
+    try {
+      const result = await fetch("/api/" + route, {
+        method: action === "activity-cancel" ? "POST" : "DELETE",
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (!result.ok) throw new Error((await result.json()).error);
+      $("dialog").close();
+      if (action !== "activity-cancel") {
+        activitySelection = "";
+        activityLog = null;
+        setRoute(false, { run: undefined });
+      }
+      await pollJobs(true);
+    } catch (error) {
+      $("form-error").textContent = error.message;
+    } finally {
+      $("submit").disabled = false;
+    }
+    return;
+  }
   let body = { id: selected, role: page, ...Object.fromEntries(data) };
   if (action === "cloud-account-save") {
-    const provider = data.get("provider") || state.cloudAccounts.accounts.find(account=>account.id===data.get("id"))?.provider;
-    body = { ...(data.get("id") ? {id:data.get("id")} : {}), name:data.get("name"), provider, clearSessionToken:data.get("clearSessionToken")==="on",
-      values:Object.fromEntries((state.cloudAccounts.providers[provider]?.fields||[]).map(key=>key.replace("?", "")).map(key=>[key,data.get(key)||""])) };
+    const provider =
+      data.get("provider") ||
+      state.cloudAccounts.accounts.find(
+        (account) => account.id === data.get("id"),
+      )?.provider;
+    body = {
+      ...(data.get("id") ? { id: data.get("id") } : {}),
+      name: data.get("name"),
+      provider,
+      clearSessionToken: data.get("clearSessionToken") === "on",
+      values: Object.fromEntries(
+        (state.cloudAccounts.providers[provider]?.fields || [])
+          .map((key) => key.replace("?", ""))
+          .map((key) => [key, data.get(key) || ""]),
+      ),
+    };
   }
-  if (action === "remove-preview") body = { ...body, dedicated:data.get("dedicated")==="on", deleteCloud:data.get("cloudMode")==="dedicated", sharedHost:data.get("cloudMode")==="shared" };
-  if (action === "remove-node") body = { id:selected, role:page, token:removalReview.token, confirmation:data.get("confirmation") };
-  if (action === "checkpoint-current") body = { ...body, checkpointId:current().publicCheckpoint.id, fingerprint:current().publicCheckpoint.fingerprint };
+  if (action === "remove-preview")
+    body = {
+      ...body,
+      dedicated: data.get("dedicated") === "on",
+      deleteCloud: data.get("cloudMode") === "dedicated",
+      sharedHost: data.get("cloudMode") === "shared",
+    };
+  if (action === "remove-node")
+    body = {
+      id: selected,
+      role: page,
+      token: removalReview.token,
+      confirmation: data.get("confirmation"),
+    };
+  if (action === "checkpoint-current")
+    body = {
+      ...body,
+      checkpointId: current().publicCheckpoint.id,
+      fingerprint: current().publicCheckpoint.fingerprint,
+    };
   pending = true;
   $("submit").disabled =
     $("cancel").disabled =
     $("close-dialog").disabled =
       true;
-  const progressTimer = action === "remove-node" ? setInterval(async () => {
-    try {
-      const status = await api("removal-status");
-      const progress = status.removals.find(item=>item.nodeId===removalReview.nodeId);
-      if (progress && $("removal-progress")) $("removal-progress").textContent = "Removed " + progress.completed + " of " + progress.total + " resource groups. Waiting for provider confirmation…";
-    } catch { /* The removal request reports its own error. */ }
-  }, 2000) : null;
+  const progressTimer =
+    action === "remove-node"
+      ? setInterval(async () => {
+          try {
+            const status = await api("removal-status");
+            const progress = status.removals.find(
+              (item) => item.nodeId === removalReview.nodeId,
+            );
+            if (progress && $("removal-progress"))
+              $("removal-progress").textContent =
+                "Removed " +
+                progress.completed +
+                " of " +
+                progress.total +
+                " resource groups. Waiting for provider confirmation…";
+          } catch {
+            /* The removal request reports its own error. */
+          }
+        }, 2000)
+      : null;
   const original = $("submit").textContent;
   $("submit").textContent = "Working…";
   $("form-error").textContent = "";
@@ -1422,10 +2303,17 @@ $("form").onsubmit = async (e) => {
     }
     if (action === "connection" && current().publicPeer)
       body.peer = current().publicPeer;
+    if (backgroundActions.has(action)) {
+      await launchJob(action, body);
+      return;
+    }
     const result = await api(action, body);
-    if (action === "remove-preview") { removalDetails(result); return; }
+    if (action === "remove-preview") {
+      removalDetails(result);
+      return;
+    }
     if (action === "remove-node") {
-      const url = new URL(location.href);url.searchParams.delete("node");url.searchParams.delete("step");history.replaceState(null,"",url);
+      setRoute(false, { node: undefined, step: undefined });
     }
     if (["register", "request-sentry"].includes(action)) {
       const w = window.ethereum;
@@ -1459,10 +2347,7 @@ $("form").onsubmit = async (e) => {
       return;
     }
     if (action === "create-node") {
-      const url = new URL(location.href);
-      url.searchParams.set("node", result.nodeId);
-      url.searchParams.set("step", "configuration");
-      history.replaceState(null, "", url);
+      setRoute(false, { node: result.nodeId, step: "configuration" });
     }
     if (["import", "import-url"].includes(action)) {
       selected = result.id;
@@ -1476,9 +2361,7 @@ $("form").onsubmit = async (e) => {
       (action === "host" && body.kind === "local") ||
       action === "host-install"
     ) {
-      const url = new URL(location.href);
-      url.searchParams.set("step", "chain");
-      history.replaceState(null, "", url);
+      setRoute(false, { step: "chain" });
       render();
     }
     feedback((actionLabels[action] || action) + " · completed.");
@@ -1498,16 +2381,20 @@ $("form").onsubmit = async (e) => {
       $("cancel").disabled =
       $("close-dialog").disabled =
         false;
-    $("submit").textContent = formAction === action ? original : formAction === "remove-node" ? "Remove permanently" : original;
+    $("submit").textContent =
+      formAction === action
+        ? original
+        : formAction === "remove-node"
+          ? "Remove permanently"
+          : original;
     render();
   }
 };
 document.addEventListener("click", async (e) => {
+  if (e.defaultPrevented) return;
   const stage = e.target.closest("[data-step]");
   if (stage && !pending) {
-    const url = new URL(location.href);
-    url.searchParams.set("step", stage.dataset.step);
-    history.pushState(null, "", url);
+    setRoute(true, { step: stage.dataset.step });
     feedback();
     render();
     return;
@@ -1519,17 +2406,142 @@ document.addEventListener("click", async (e) => {
     go(link.dataset.page);
     return;
   }
+  const anchor = e.target.closest("a[href]");
+  if (
+    anchor &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.shiftKey &&
+    !e.altKey &&
+    !anchor.target
+  ) {
+    const target = new URL(anchor.href, location.href);
+    if (
+      target.origin === location.origin &&
+      /^\/(?:dev|test|prod|[a-f0-9]{64})\//.test(target.pathname)
+    ) {
+      e.preventDefault();
+      navigatePath(target.pathname);
+      if ($("dialog").open && !pending) $("dialog").close();
+      return;
+    }
+  }
   const b = e.target.closest("[data-action]");
   if (!b || pending) return;
   const action = b.dataset.action;
+  if (action === "activity-select") {
+    activitySelection = b.dataset.run;
+    activityLog = null;
+    activityLogSearch = "";
+    activityHistoryOpen = false;
+    setRoute(true, { run: activitySelection });
+    render();
+    void pollJobs(true);
+    return;
+  }
+  if (action === "activity-history") {
+    activityHistoryOpen = !activityHistoryOpen;
+    render();
+    return;
+  }
+  if (action === "activity-reset") {
+    activitySearch = "";
+    activityStatus = activityOperation = activityType = activityServer = "all";
+    activitySort = "newest";
+    render();
+    return;
+  }
+  if (action === "activity-copy") {
+    try {
+      await navigator.clipboard.writeText(activityLog?.text || "");
+      feedback("Log copied.");
+    } catch (error) {
+      feedback("Could not copy log: " + error.message);
+    }
+    return;
+  }
+  if (action === "activity-download") {
+    const url = URL.createObjectURL(
+      new Blob([activityLog?.text || ""], { type: "text/plain;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "graphene-" + (selectedJob()?.id || "run") + ".log";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return;
+  }
+  if (action === "activity-refresh") {
+    void pollJobs(true);
+    return;
+  }
+  if (
+    ["activity-cancel", "activity-delete", "activity-clear"].includes(action)
+  ) {
+    const job = selectedJob();
+    if (action !== "activity-clear" && !job) return;
+    const title =
+      action === "activity-cancel"
+        ? "Cancel this run?"
+        : action === "activity-clear"
+          ? "Clear completed activity?"
+          : "Delete this activity?";
+    $("dialog-title").textContent = title;
+    $("dialog-category").textContent = "Activity";
+    $("fields").innerHTML =
+      '<p class="dialog-copy">' +
+      (action === "activity-cancel"
+        ? "Cancellation stops commands where possible. Completed changes remain; inspect the server before retrying."
+        : "This removes the selected activity records and their saved logs. Deployed servers and node data are kept.") +
+      "</p>";
+    $("form-error").textContent = "";
+    $("submit").textContent =
+      action === "activity-cancel" ? "Cancel run" : "Delete activity";
+    formAction = action;
+    $("dialog").showModal();
+    return;
+  }
+  if (["server-inspect", "server-logs", "server-status"].includes(action)) {
+    const n = current(),
+      target =
+        b.dataset.nodeId || $("activity-target")?.value || selectedNodeId();
+    const node = n?.nodes.find((node) => node.nodeId === target);
+    if (!node || state.busy) return;
+    try {
+      await launchJob(
+        action === "server-inspect"
+          ? "inspect"
+          : action === "server-logs"
+            ? "logs"
+            : "status",
+        { id: selected, role: node.role, nodeId: node.nodeId },
+      );
+    } catch (error) {
+      feedback(error.message);
+    }
+    return;
+  }
+  if (action === "health-auto") {
+    autoHealth = !autoHealth;
+    render();
+    if (autoHealth) await checkNetworkHealth();
+    return;
+  }
+  if (action === "network-health") {
+    await checkNetworkHealth();
+    return;
+  }
   if (action === "cloud-account-open") return credentialForm();
   if (action === "cloud-account-edit") {
-    const account = state.cloudAccounts.accounts.find(account=>account.id===b.dataset.accountId);
-    return credentialForm(account.provider,account);
+    const account = state.cloudAccounts.accounts.find(
+      (account) => account.id === b.dataset.accountId,
+    );
+    return credentialForm(account.provider, account);
   }
   if (action === "remove-node") {
     if (b.dataset.nodeId) {
-      const url = new URL(location.href);url.searchParams.set("node",b.dataset.nodeId);history.replaceState(null,"",url);render();
+      setRoute(false, { node: b.dataset.nodeId });
+      render();
     }
     return removalForm();
   }
@@ -1538,13 +2550,25 @@ document.addEventListener("click", async (e) => {
     pending = true;
     render();
     try {
-      await api(action, { workspace: workspace.workspaceId, fingerprint: workspace.workspaceUpdate.fingerprint });
+      await api(action, {
+        workspace: workspace.workspaceId,
+        fingerprint: workspace.workspaceUpdate.fingerprint,
+      });
       await refresh();
-      feedback("Network invitation updated. Existing nodes retain their pinned runtimes.");
+      feedback(
+        "Network invitation updated. Existing nodes retain their pinned runtimes.",
+      );
     } catch (error) {
-      try { await refresh(); } catch { /* Preserve the update error. */ }
+      try {
+        await refresh();
+      } catch {
+        /* Preserve the update error. */
+      }
       feedback(error.message);
-    } finally { pending = false; render(); }
+    } finally {
+      pending = false;
+      render();
+    }
     return;
   }
   if (action === "workspace-refresh") {
@@ -1554,8 +2578,12 @@ document.addEventListener("click", async (e) => {
       await api(action, { workspace: current().workspaceId });
       await refresh();
       feedback(current()?.workspaceError || "Public network refreshed.");
-    } catch (error) { feedback(error.message); }
-    finally { pending = false; render(); }
+    } catch (error) {
+      feedback(error.message);
+    } finally {
+      pending = false;
+      render();
+    }
     return;
   }
   if (action === "networks") return go(action);
@@ -1600,6 +2628,18 @@ document.addEventListener("click", async (e) => {
       );
     } catch (err) {
       feedback(err.message);
+    }
+    return;
+  }
+  if (["status", "health", "logs"].includes(action)) {
+    try {
+      await launchJob(action, {
+        id: selected,
+        role: page,
+        nodeId: selectedNodeId(),
+      });
+    } catch (error) {
+      feedback(error.message);
     }
     return;
   }
@@ -1650,7 +2690,129 @@ document.addEventListener("click", async (e) => {
   }
   dialog(action);
 });
-if (token)
-  refresh().catch((e) => {
-    $("gate-error").textContent = e.message;
-  });
+async function initializeConsole() {
+  $("gate-help").hidden = true;
+  $("gate-error").textContent = "";
+  $("gate-retry").hidden = true;
+  $("gate-retry").disabled = true;
+  if (!token) {
+    $("gate-title").textContent = "Open your node console";
+    $("gate-status").textContent =
+      "Use the private link printed by the launcher.";
+    $("gate-help").hidden = false;
+    return;
+  }
+  $("gate-title").textContent = "Loading your node console…";
+  $("gate-status").textContent =
+    "Restoring your session and loading workspaces.";
+  try {
+    await refresh();
+  } catch (error) {
+    $("gate-title").textContent = "Unable to load the console";
+    $("gate-status").textContent =
+      "Retry loading, or reopen the private link from your launcher.";
+    $("gate-error").textContent = error.message;
+    $("gate-retry").hidden = false;
+  } finally {
+    $("gate-retry").disabled = false;
+  }
+}
+$("gate-retry").onclick = initializeConsole;
+void initializeConsole();
+
+async function checkNetworkHealth() {
+  const n = current();
+  if (pending || state?.busy || !n || (n.workspaceId && !n.networkId)) return;
+  const id = n.networkId || n.id;
+  pending = true;
+  render();
+  try {
+    healthReports.set(id, await api("network-health", { id }));
+    feedback("Network health check complete.");
+  } catch (error) {
+    feedback(error.message);
+  } finally {
+    pending = false;
+    render();
+  }
+}
+setInterval(() => {
+  if (page === "monitor" && autoHealth && !document.hidden)
+    void checkNetworkHealth();
+}, 30000);
+document.addEventListener("change", (e) => {
+  const value = e.target.value;
+  switch (e.target.id) {
+    case "activity-status":
+      activityStatus = value;
+      break;
+    case "activity-type":
+      activityType = value;
+      activityOperation = "all";
+      break;
+    case "activity-operation":
+      activityOperation = value;
+      break;
+    case "activity-server":
+      activityServer = value;
+      break;
+    case "activity-sort":
+      activitySort = value;
+      break;
+    case "activity-target":
+      activityTarget = value;
+      break;
+    case "activity-wrap":
+      activityWrap = e.target.checked;
+      break;
+    case "activity-follow":
+      activityFollow = e.target.checked;
+      break;
+    case "health-role":
+      healthRole = value;
+      break;
+    case "health-filter":
+      healthFilter = value;
+      break;
+    default:
+      return;
+  }
+  render();
+});
+document.addEventListener("input", (e) => {
+  if (
+    !["activity-search", "activity-log-search", "health-search"].includes(
+      e.target.id,
+    )
+  )
+    return;
+  const id = e.target.id,
+    value = e.target.value,
+    position = e.target.selectionStart;
+  if (id === "activity-search") activitySearch = value;
+  else if (id === "activity-log-search") activityLogSearch = value;
+  else healthSearch = value;
+  render();
+  $(id).focus();
+  $(id).setSelectionRange(position, position);
+});
+
+setInterval(() => {
+  if (
+    page === "monitor" &&
+    !pending &&
+    !document.hidden &&
+    !["INPUT", "SELECT"].includes(document.activeElement?.tagName)
+  )
+    render();
+}, 10000);
+
+setInterval(() => {
+  if (
+    state &&
+    (page === "activity" ||
+      pending ||
+      state.jobs?.some((job) => job.status === "running"))
+  )
+    void pollJobs();
+}, 1000);

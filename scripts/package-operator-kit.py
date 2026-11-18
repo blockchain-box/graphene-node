@@ -38,6 +38,7 @@ def main():
                               if key == 'start'}
         package['dependencies'] = {k:v for k,v in package['dependencies'].items()
                                    if k in ['@grph-net/utils', 'ethers', 'tweetnacl', 'z32']}
+        package.pop('devDependencies', None)
         package_file.write_text(json.dumps(package, indent=2) + '\n')
         # Refresh the staged lockfile for the kit's reduced package manifest.
         # Never run dependency lifecycle scripts while packaging.

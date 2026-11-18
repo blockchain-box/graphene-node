@@ -6,7 +6,11 @@
   "scripts": {
     "start": "node participant/server.js",
     "test": "node --test scripts/*.test.js",
-    "package:operator-kit": "python3 scripts/package-operator-kit.py"
+    "package:operator-kit": "python3 scripts/package-operator-kit.py",
+    "build:ui": "node scripts/build-ui.mjs",
+    "prestart": "npm run build:ui",
+    "prepackage:operator-kit": "npm run build:ui",
+    "pretest": "npm run build:ui"
   },
   "dependencies": {
     "@grph-net/utils": "file:./network/utils",
@@ -17,5 +21,11 @@
   "description": "Browser console for running and managing Graphene validator and sentry nodes",
   "engines": {
     "node": ">=24"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "7.18.5"
   }
 }

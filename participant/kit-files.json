@@ -46,5 +46,11 @@
   "participant/cloud-metadata.js",
   "participant/cloud-removal.js",
   "participant/removal.js",
-  "participant/removal-files.js"
+  "participant/removal-files.js",
+  "participant/network-health.js",
+  "participant/jobs.js",
+  "participant/inspection.js",
+  "participant/ui/activity.js",
+  "participant/ui/router.bundle.js",
+  "participant/ui/routes.js"
 ]

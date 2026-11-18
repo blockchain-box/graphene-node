@@ -1,4 +1,4 @@
-// Adapted from grph-deployment/frontend/src/components/DeploymentSteps.tsx.
+// Ordered participant deployment steps with review and explicit completion.
 // Keep the same ordered setup, back navigation, review and explicit finish model
 // without requiring the controller's React application on participant machines.
 export const stages = [

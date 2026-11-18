@@ -12,11 +12,17 @@ import { invitationFromUrl } from "./invitation-api.js";
 import { PublicWorkspaces } from "./public-workspaces.js";
 import { CloudAccounts } from "./cloud-accounts.js";
 import { NodeRemoval } from "./removal.js";
+import { Jobs, jobContext, secretValues, environmentSecrets } from "./jobs.js";
+import { inspectNode } from "./inspection.js";
+import { networkHealth } from "./network-health.js";
 import { PublicCheckpoints } from "./public-checkpoints.js";
 
 const assets = {
   "/": ["index.html", "text/html"],
+  "/router.bundle.js": ["router.bundle.js", "text/javascript"],
+  "/routes.js": ["routes.js", "text/javascript"],
   "/app.js": ["app.js", "text/javascript"],
+  "/activity.js": ["activity.js", "text/javascript"],
   "/progress.js": ["progress.js", "text/javascript"],
   "/deployment-steps.js": ["deployment-steps.js", "text/javascript"],
   "/styles.css": ["styles.css", "text/css"],
@@ -41,19 +47,42 @@ export function createConsole(
     fetchCheckpoint,
   } = {},
 ) {
-  const nodes = new Participants(root, runner);
+  const loggedRunner = runner
+    ? async (...args) => {
+        jobContext()?.append("docker compose " + args[2].join(" ") + "\n");
+        const output = await runner(...args);
+        if (["logs", "ps", "stats"].includes(args[2][0])) {
+          if (jobContext()) jobContext().outputCaptured = true;
+          jobContext()?.append(String(output) + "\n");
+        }
+        return output;
+      }
+    : undefined;
+  const nodes = new Participants(root, loggedRunner);
   const hosts = new Hosts(nodes);
   const workspaces = new PublicWorkspaces(nodes, fetchInvitation);
   const checkpoints = new PublicCheckpoints(fetchCheckpoint);
   const cloudAccounts = new CloudAccounts(root);
-  const removal = new NodeRemoval(nodes, { accounts: cloudAccounts, ...removalOptions });
+  const removal = new NodeRemoval(nodes, {
+    accounts: cloudAccounts,
+    ...removalOptions,
+  });
+  const jobs = new Jobs(root);
   const activityFile = path.join(root, "activity.jsonl");
   let busy = false;
-  function record(action, id, role, ok, nodeId) {
+  function record(action, id, role, ok, nodeId, started) {
     fs.appendFileSync(
       activityFile,
-      JSON.stringify({ time: new Date().toISOString(), action, id, role, ok, nodeId }) +
-        "\n",
+      JSON.stringify({
+        time: new Date().toISOString(),
+        action,
+        id,
+        role,
+        ok,
+        nodeId,
+        runId: jobContext()?.id || randomBytes(12).toString("hex"),
+        durationMs: Date.now() - started,
+      }) + "\n",
       { mode: 0o600 },
     );
   }
@@ -77,14 +106,12 @@ export function createConsole(
     const route = req.url.split("?")[0];
     if (req.method === "GET") {
       const icon = /^\/icons\/([a-z-]+)\.svg$/.exec(route);
-      const asset = Object.hasOwn(assets, route) && assets[route];
+      const clientRoute = /^\/(?:dev|test|prod|[a-f0-9]{64})(?:\/[a-zA-Z0-9/-]*)?\/?$/.test(route);
+      const asset = Object.hasOwn(assets, route) ? assets[route] : clientRoute ? assets["/"] : null;
       if (asset || (icon && icons.has(icon[1]))) {
         const file = asset
           ? new URL("./ui/" + asset[0], import.meta.url)
-          : new URL(
-              "./ui/icons/" + icon[1] + ".svg",
-              import.meta.url,
-            );
+          : new URL("./ui/icons/" + icon[1] + ".svg", import.meta.url);
         res.writeHead(200, {
           "Content-Type": asset ? asset[1] : "image/svg+xml",
         });
@@ -101,12 +128,56 @@ export function createConsole(
         error: "Open the complete private link printed in your terminal.",
       });
     try {
+      const jobRoute =
+        /^\/api\/jobs(?:\/([a-f0-9]{24})(?:\/(logs|cancel))?)?$/.exec(route);
+      if (jobRoute) {
+        const [, jobId, operation] = jobRoute;
+        if (req.method === "GET")
+          return json(
+            200,
+            jobId
+              ? operation === "logs"
+                ? jobs.logs(jobId)
+                : jobs.get(jobId)
+              : jobs.list(
+                  new URL(req.url, "http://" + host).searchParams.get(
+                    "network",
+                  ),
+                ),
+          );
+        if (req.method === "POST" && operation === "cancel")
+          return json(200, jobs.cancel(jobId));
+        if (req.method === "DELETE" && !operation) {
+          if (jobId) jobs.remove(jobId);
+          else {
+            const url = new URL(req.url, "http://" + host);
+            check(
+              url.searchParams.get("completed") === "true",
+              "Choose completed activity to clear.",
+            );
+            const network = url.searchParams.get("network");
+            check(
+              /^[a-f0-9]{64}$/.test(network || ""),
+              "Choose a network before clearing activity.",
+            );
+            for (const job of jobs
+              .list(network)
+              .filter(
+                (job) => job.networkId === network && job.status !== "running",
+              ))
+              jobs.remove(job.id);
+          }
+          return json(200, { ok: true });
+        }
+        return json(404, { error: "Unknown job action" });
+      }
       if (route === "/api/session" && req.method === "GET")
         return json(200, {
           format: "graphene-participant-console-v1",
           root: fs.realpathSync(root),
         });
-      if (route === "/api/removal-status" && req.method === "GET") return json(200, { removals: removal.progress() });
+      if (route === "/api/removal-status" && req.method === "GET")
+        return json(200, { removals: removal.progress() });
       if (route === "/api/state" && req.method === "GET") {
         if (!busy) await workspaces.refresh();
         const activity = fs.existsSync(activityFile)
@@ -120,17 +191,30 @@ export function createConsole(
               .reverse()
           : [];
         const networks = await hosts.inventory();
-        await Promise.all(networks.map(async network => {
-          network.publicCheckpoint = checkpoints.summary(await checkpoints.lookup(nodes.network(network.id)));
-          await Promise.all(network.nodes.map(async node => {
-            node.publicCheckpoint = checkpoints.summary(await checkpoints.lookup(nodes.selectNode(network.id, node.role, node.nodeId).network(network.id)));
-          }));
-        }));
+        await Promise.all(
+          networks.map(async (network) => {
+            network.publicCheckpoint = checkpoints.summary(
+              await checkpoints.lookup(nodes.network(network.id)),
+            );
+            await Promise.all(
+              network.nodes.map(async (node) => {
+                node.publicCheckpoint = checkpoints.summary(
+                  await checkpoints.lookup(
+                    nodes
+                      .selectNode(network.id, node.role, node.nodeId)
+                      .network(network.id),
+                  ),
+                );
+              }),
+            );
+          }),
+        );
         return json(200, {
           networks,
           workspaces: workspaces.snapshot(),
           cloudAccounts: cloudAccounts.summary(),
           activity,
+          jobs: jobs.list(),
           busy,
           defaultPage,
         });
@@ -145,6 +229,8 @@ export function createConsole(
           "workspace-refresh",
           "workspace-update",
           "cloud-account-save",
+          "network-health",
+          "inspect",
           "remove-preview",
           "remove-node",
           "ssh-generate",
@@ -192,139 +278,293 @@ export function createConsole(
           error: "Another node operation is running. Wait for it to finish.",
         });
       busy = true;
+      const started = Date.now();
+      const tracked = ![
+        "cloud-account-save",
+        "ssh-generate",
+        "ssh-trust",
+        "remove-preview",
+        "enrollment",
+        "register",
+        "request-sentry",
+        "sentry-invitation",
+      ].includes(action);
+      const execute = async () => {
+        try {
+          const scopedNodes = ![
+            "import",
+            "import-url",
+            "create-node",
+            "workspace-refresh",
+            "workspace-update",
+            "cloud-account-save",
+            "remove-preview",
+            "remove-node",
+            "network-health",
+          ].includes(action)
+            ? nodes.selectNode(body.id, body.role, body.nodeId)
+            : nodes;
+          const scopedHosts = new Hosts(scopedNodes);
+          let id = body.id,
+            role = body.role,
+            result;
+          if (action === "network-health") {
+            result = await networkHealth(nodes, body.id);
+          } else if (action === "cloud-account-save") {
+            result = cloudAccounts.save(body);
+          } else if (action === "remove-preview") {
+            result = await removal.preview(body);
+          } else if (action === "remove-node") {
+            result = await removal.remove(body);
+          } else if (action === "workspace-update") {
+            check(
+              typeof body.workspace === "string",
+              "Choose Dev, Test or Prod.",
+            );
+            result = await workspaces.update(body.workspace, body.fingerprint);
+          } else if (action === "workspace-refresh") {
+            check(
+              typeof body.workspace === "string",
+              "Choose Dev, Test or Prod.",
+            );
+            result = {
+              workspaces: await workspaces.refresh(body.workspace, true),
+            };
+          } else if (action === "import" || action === "import-url") {
+            id = nodes.import(
+              action === "import-url"
+                ? await invitationFromUrl(body.url)
+                : body.raw,
+              body.fingerprint,
+            );
+            result = { id };
+          } else if (action === "create-node") {
+            result = nodes.createNode(id, role, body.name);
+          } else if (action === "ssh-generate") {
+            result = await scopedHosts.generateSsh(id, role);
+          } else if (action === "ssh-trust") {
+            result = scopedHosts.trustSsh(id, role, body);
+          } else if (action === "host") {
+            result = await scopedHosts.save(id, role, body);
+          } else if (action === "host-install") {
+            result = await scopedHosts.install(id, role);
+          } else if (action === "checkpoint-current") {
+            const current = await checkpoints.lookup(
+              scopedNodes.network(id),
+              true,
+            );
+            check(current.available, current.error);
+            check(
+              body.checkpointId === current.id &&
+                body.fingerprint === current.fingerprint,
+              "The public checkpoint changed. Refresh and review the current checkpoint.",
+            );
+            const selection = {
+              ...body,
+              raw: current.raw,
+              fingerprint: current.fingerprint,
+              baseUrl: current.baseUrl,
+            };
+            result =
+              scopedHosts.get(id, role).kind === "cloud"
+                ? await scopedHosts.call(
+                    id,
+                    role,
+                    "checkpoint-select",
+                    selection,
+                  )
+                : scopedNodes.selectCheckpoint(
+                    id,
+                    role,
+                    current.raw,
+                    current.fingerprint,
+                    current.baseUrl,
+                  );
+          } else if (action === "inspect") {
+            result =
+              scopedHosts.get(id, role).kind === "cloud"
+                ? await scopedHosts.inspect(id, role)
+                : await inspectNode(scopedNodes, id, role);
+          } else if (
+            !["enrollment", "register", "request-sentry"].includes(action) &&
+            scopedHosts.get(id, role).kind === "cloud"
+          ) {
+            if (
+              ["prepare-validator-public", "prepare-sentry"].includes(action) &&
+              scopedNodes.network(id).publicPeer
+            )
+              await scopedHosts.install(id, role);
+            result = await scopedHosts.call(id, role, action, body);
+          } else if (action === "identity") {
+            role = "validator";
+            scopedNodes.identity(id, body.operator, body.password);
+          } else if (action === "prepare-validator") {
+            role = "validator";
+            scopedNodes.prepareValidator(id, body.bundle);
+          } else if (action === "prepare-validator-public") {
+            role = "validator";
+            scopedNodes.prepareInvitedValidator(id);
+          } else if (action === "prepare-sentry") {
+            role = "sentry";
+            scopedNodes.prepareSentry(id, body.address, body.peer, body);
+          } else if (action === "connection") {
+            result = scopedNodes.configureConnection(id, role, body.peer);
+          } else if (action === "review") {
+            result = scopedNodes.reviewDeployment(id, role);
+          } else if (action === "sentry-invitation") {
+            result = scopedNodes.sentryInvitation(id);
+          } else if (action === "checkpoint-select") {
+            result = scopedNodes.selectCheckpoint(
+              id,
+              role,
+              body.raw,
+              body.fingerprint,
+              body.baseUrl,
+            );
+          } else if (action === "checkpoint-restore") {
+            result = await scopedNodes.restore(id, role);
+          } else if (
+            ["enrollment", "register", "request-sentry"].includes(action)
+          ) {
+            role = "validator";
+            const invite = scopedNodes.network(id),
+              identity = (await scopedHosts.inventory())
+                .find((n) => n.id === id)
+                ?.nodes.find(
+                  (n) => n.nodeId === (body.nodeId || role),
+                )?.identity;
+            check(
+              identity,
+              "Create a validator identity on the selected host first.",
+            );
+            const state = await enrollment(invite, identity);
+            result =
+              action === "enrollment"
+                ? state
+                : transaction(invite, identity, state, action, body.amount);
+          } else result = await scopedNodes.operate(id, role, action);
+          if (
+            ![
+              "network-health",
+              "status",
+              "health",
+              "logs",
+              "enrollment",
+              "register",
+              "request-sentry",
+            ].includes(action)
+          )
+            record(
+              action,
+              id,
+              role,
+              true,
+              result?.nodeId || body.nodeId,
+              started,
+            );
+          if (jobContext() && role && action !== "remove-node") {
+            try {
+              const target = nodes.selectNode(
+                id,
+                role,
+                result?.nodeId || body.nodeId,
+              );
+              const hostConfig = new Hosts(target).get(id, role);
+              jobContext().updateTarget({
+                nodeId: target.selection?.nodeId || role,
+                nodeName: target.selection?.name || role,
+                host:
+                  hostConfig.kind === "cloud"
+                    ? hostConfig.address
+                    : "Local Docker Engine",
+                provider:
+                  hostConfig.kind === "cloud" ? hostConfig.provider : "local",
+              });
+            } catch {
+              /* Preserve the original target if this run removed it. */
+            }
+          }
+          return result ?? { ok: true };
+        } catch (error) {
+          if (
+            ![
+              "network-health",
+              "status",
+              "health",
+              "logs",
+              "enrollment",
+              "register",
+              "request-sentry",
+            ].includes(action)
+          )
+            record(
+              action,
+              /^[a-f0-9]{64}$/.test(body.id) ? body.id : null,
+              ["validator", "sentry"].includes(body.role) ? body.role : null,
+              false,
+              body.nodeId,
+              started,
+            );
+          throw error;
+        } finally {
+          busy = false;
+        }
+      };
+      if (!tracked) return json(200, await execute());
+      let metadata = {
+        action,
+        networkId: /^[a-f0-9]{64}$/.test(body.id || "") ? body.id : null,
+        role: ["validator", "sentry"].includes(body.role) ? body.role : null,
+      };
       try {
-        const scopedNodes = !["import", "import-url", "create-node", "workspace-refresh", "workspace-update", "cloud-account-save", "remove-preview", "remove-node"].includes(action)
-          ? nodes.selectNode(body.id, body.role, body.nodeId) : nodes;
-        const scopedHosts = new Hosts(scopedNodes);
-        let id = body.id,
-          role = body.role,
-          result;
-        if (action === "cloud-account-save") {
-          result = cloudAccounts.save(body);
-        } else if (action === "remove-preview") {
-          result = await removal.preview(body);
-        } else if (action === "remove-node") {
-          result = await removal.remove(body);
-        } else if (action === "workspace-update") {
-          check(typeof body.workspace === "string", "Choose Dev, Test or Prod.");
-          result = await workspaces.update(body.workspace, body.fingerprint);
-        } else if (action === "workspace-refresh") {
-          check(typeof body.workspace === "string", "Choose Dev, Test or Prod.");
-          result = { workspaces: await workspaces.refresh(body.workspace, true) };
-        } else if (action === "import" || action === "import-url") {
-          id = nodes.import(
-            action === "import-url"
-              ? await invitationFromUrl(body.url)
-              : body.raw,
-            body.fingerprint,
-          );
-          result = { id };
-        } else if (action === "create-node") {
-          result = nodes.createNode(id, role, body.name);
-        } else if (action === "ssh-generate") {
-          result = await scopedHosts.generateSsh(id, role);
-        } else if (action === "ssh-trust") {
-          result = scopedHosts.trustSsh(id, role, body);
-        } else if (action === "host") {
-          result = await scopedHosts.save(id, role, body);
-        } else if (action === "host-install") {
-          result = await scopedHosts.install(id, role);
-        } else if (action === "checkpoint-current") {
-          const current = await checkpoints.lookup(scopedNodes.network(id), true);
-          check(current.available, current.error);
-          check(body.checkpointId === current.id && body.fingerprint === current.fingerprint,
-            "The public checkpoint changed. Refresh and review the current checkpoint.");
-          const selection = { ...body, raw:current.raw, fingerprint:current.fingerprint, baseUrl:current.baseUrl };
-          result = scopedHosts.get(id, role).kind === "cloud"
-            ? await scopedHosts.call(id, role, "checkpoint-select", selection)
-            : scopedNodes.selectCheckpoint(id, role, current.raw, current.fingerprint, current.baseUrl);
-        } else if (
-          !["enrollment", "register", "request-sentry"].includes(action) &&
-          scopedHosts.get(id, role).kind === "cloud"
-        ) {
-          if (["prepare-validator-public", "prepare-sentry"].includes(action) && scopedNodes.network(id).publicPeer)
-            await scopedHosts.install(id, role);
-          result = await scopedHosts.call(id, role, action, body);
-        } else if (action === "identity") {
-          role = "validator";
-          scopedNodes.identity(id, body.operator, body.password);
-        } else if (action === "prepare-validator") {
-          role = "validator";
-          scopedNodes.prepareValidator(id, body.bundle);
-        } else if (action === "prepare-validator-public") {
-          role = "validator";
-          scopedNodes.prepareInvitedValidator(id);
-        } else if (action === "prepare-sentry") {
-          role = "sentry";
-          scopedNodes.prepareSentry(id, body.address, body.peer, body);
-        } else if (action === "connection") {
-          result = scopedNodes.configureConnection(id, role, body.peer);
-        } else if (action === "review") {
-          result = scopedNodes.reviewDeployment(id, role);
-        } else if (action === "sentry-invitation") {
-          result = scopedNodes.sentryInvitation(id);
-        } else if (action === "checkpoint-select") {
-          result = scopedNodes.selectCheckpoint(
-            id,
-            role,
-            body.raw,
-            body.fingerprint,
-            body.baseUrl,
-          );
-        } else if (action === "checkpoint-restore") {
-          result = await scopedNodes.restore(id, role);
-        } else if (
-          ["enrollment", "register", "request-sentry"].includes(action)
-        ) {
-          role = "validator";
-          const invite = scopedNodes.network(id),
-            identity = (await scopedHosts.inventory())
-              .find((n) => n.id === id)
-              ?.nodes.find((n) => n.nodeId === (body.nodeId || role))?.identity;
-          check(
-            identity,
-            "Create a validator identity on the selected host first.",
-          );
-          const state = await enrollment(invite, identity);
-          result =
-            action === "enrollment"
-              ? state
-              : transaction(invite, identity, state, action, body.amount);
-        } else result = await scopedNodes.operate(id, role, action);
-        if (
-          ![
-            "status",
-            "health",
-            "logs",
-            "enrollment",
-            "register",
-            "request-sentry",
-          ].includes(action)
-        )
-          record(action, id, role, true, result?.nodeId || body.nodeId);
-        return json(200, result ?? { ok: true });
-      } catch (error) {
-        if (
-          ![
-            "status",
-            "health",
-            "logs",
-            "enrollment",
-            "register",
-            "request-sentry",
-          ].includes(action)
-        )
-          record(
-            action,
-            /^[a-f0-9]{64}$/.test(body.id) ? body.id : null,
-            ["validator", "sentry"].includes(body.role) ? body.role : null,
-            false,
-            body.nodeId,
-          );
-        throw error;
-      } finally {
-        busy = false;
+        const scoped = metadata.role
+          ? nodes.selectNode(body.id, body.role, body.nodeId)
+          : nodes;
+        const network = nodes.network(body.id);
+        metadata.stage = network.network.stage;
+        if (metadata.role) {
+          const hostConfig = new Hosts(scoped).get(body.id, body.role);
+          metadata = {
+            ...metadata,
+            nodeId: scoped.selection?.nodeId || body.role,
+            nodeName: scoped.selection?.name || body.role,
+            host:
+              hostConfig.kind === "cloud"
+                ? hostConfig.address
+                : "Local Docker Engine",
+            provider:
+              hostConfig.kind === "cloud" ? hostConfig.provider : "local",
+          };
+        }
+      } catch {
+        /* Operation validation supplies the run's concrete error. */
       }
+      let running;
+      try {
+        let nodeSecrets = [];
+        if (metadata.networkId && metadata.role)
+          nodeSecrets = environmentSecrets(
+            path.join(
+              nodes
+                .selectNode(body.id, body.role, body.nodeId)
+                .dir(body.id, body.role),
+              ".env",
+            ),
+          );
+        const secrets = [
+          token,
+          ...secretValues(body),
+          ...nodeSecrets,
+          ...cloudAccounts.rows().flatMap((row) => Object.values(row.values)),
+        ];
+        running = jobs.start(metadata, execute, { secrets });
+      } catch (error) {
+        busy = false;
+        throw error;
+      }
+      if (req.headers.prefer === "respond-async")
+        return json(202, { job: running.job });
+      return json(200, await running.promise);
     } catch (error) {
       return json(400, { error: error.message });
     }
@@ -385,7 +625,7 @@ async function launchConsole() {
   const reuse = async () => {
     let url = await existingConsole(root);
     if (!url) return false;
-    if (sentry) url = url.replace("/#", "/?page=sentry#");
+    if (sentry) url = url.replace("/#", "/dev/sentries#");
     console.log(
       "Graphene participant console is already running — open this private link:\n" +
         url +

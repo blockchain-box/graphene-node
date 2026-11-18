@@ -9,7 +9,7 @@ export async function invitationFromUrl(value) {
   return publicJsonFromUrl(value, "/api/invitation");
 }
 
-export async function publicJsonFromUrl(value, allowedPath) {
+export async function publicJsonFromUrl(value, allowedPath, { body } = {}) {
   const url = new URL(value);
   if (
     !["http:", "https:"].includes(url.protocol) ||
@@ -30,14 +30,15 @@ export async function publicJsonFromUrl(value, allowedPath) {
     throw new Error("The sentry hostname has no IPv4 address.");
   for (const { address } of addresses) if (!local) hostname(address);
   return new Promise((resolve, reject) => {
-    const request = (url.protocol === "https:" ? https : http).get(
+    const request = (url.protocol === "https:" ? https : http).request(
       url,
       {
         lookup: (_name, options, callback) =>
           options.all
             ? callback(null, addresses)
             : callback(null, addresses[0].address, 4),
-        headers: { Accept: "application/json" },
+        method: body ? "POST" : "GET",
+        headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } : {}) },
       },
       (response) => {
         if (response.statusCode !== 200) {
@@ -65,6 +66,7 @@ export async function publicJsonFromUrl(value, allowedPath) {
         response.on("error", reject);
       },
     );
+    request.end(body);
     const timer = setTimeout(
       () => request.destroy(new Error("Sentry invitation API timed out.")),
       15000,

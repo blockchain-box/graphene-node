@@ -1,5 +1,6 @@
 import { planNodeFiles, removedNodeReceipt, deleteNodeFiles } from "./removal-files.js";
 import fs from "node:fs";
+import { jobContext, logOutput } from "./jobs.js";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { isIPv4 } from "node:net";
@@ -149,6 +150,14 @@ export function validateInvitation(raw, fingerprint) {
   }
   return invite;
 }
+function runDocker(command, args, options) {
+  logOutput("docker compose " + args.slice(5).join(" ") + "\n");
+  return new Promise((resolve, reject) => {
+    const child = execFile(command,args,{...options,signal:jobContext()?.signal},(error,stdout,stderr)=>error?reject(error):resolve({stdout,stderr}));
+    child.stdout?.on("data", text=>{if(jobContext())jobContext().outputCaptured=true;logOutput(text);});
+    child.stderr?.on("data", logOutput);
+  });
+}
 export async function docker(directory, project, args) {
   const env = { ...process.env };
   for (const key of Object.keys(env))
@@ -161,6 +170,7 @@ export async function docker(directory, project, args) {
       delete env[key];
   const options = {
     cwd: directory,
+    signal: jobContext()?.signal,
     env,
     timeout: 600000,
     maxBuffer: 1024 * 1024,
@@ -184,7 +194,7 @@ export async function docker(directory, project, args) {
     delete env.DOCKER_CONTEXT;
     env.DOCKER_HOST = endpoint;
     return (
-      await exec(
+      await runDocker(
         "docker",
         [
           "compose",
@@ -1117,7 +1127,8 @@ export class Participants {
       start: ["up", "-d"],
       stop: ["stop"],
       status: ["ps", "--all", "--format", "json"],
-      logs: ["logs", "--no-color", "--tail", "60"],
+      logs: ["logs", "--no-color", "--tail", "200"],
+      stats: ["stats", "--no-stream", "--format", "json"],
       health: [
         "exec",
         "-T",
@@ -1202,6 +1213,7 @@ export class Participants {
       };
     }
     if (action === "logs") return { text: out.slice(-24000) };
+    if (action === "stats") return out.trim() ? out.trim().split("\n").flatMap(line=>JSON.parse(line)) : [];
     if (action === "status") {
       const lines = out.trim()
         ? out

@@ -1,4 +1,4 @@
-// Bundled from grph-deployment/dashboard/snapshot_files.mjs. Participant nodes use the home layout for both roles.
+// Participant checkpoint files use the home layout for both node roles.
 // Runs offline in the digest-pinned transport container. No Docker socket or credentials.
 import fs from "node:fs";
 import path from "node:path";

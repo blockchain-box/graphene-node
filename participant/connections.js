@@ -1,4 +1,4 @@
-// Participant adaptation of grph-deployment's public sentry/private validator topology.
+// Public sentry and private validator connections for participant nodes.
 import { isIPv4 } from "node:net";
 
 export function hostname(value) {
